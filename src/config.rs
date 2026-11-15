@@ -50,6 +50,14 @@ impl Default for Config {
     }
 }
 
+const HEADER: &str = "\
+# deepseek-chat configuration
+#
+# Nothing here needs an API key. These settings control the browser session
+# and, if DeepSeek redesigns its site, which elements are used.
+
+";
+
 impl Config {
     pub fn load() -> Result<Self> {
         let path = config_path();
@@ -67,9 +75,17 @@ impl Config {
         let path = config_path();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).ok();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
         }
-        std::fs::write(&path, toml::to_string_pretty(self)?)
-            .with_context(|| format!("writing {}", path.display()))
+        std::fs::write(
+            &path,
+            format!("{HEADER}{}", toml::to_string_pretty(self)?),
+        )
+        .with_context(|| format!("writing {}", path.display()))
     }
 }
 
