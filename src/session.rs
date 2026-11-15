@@ -114,37 +114,94 @@ const VIS: &str = r#"
 
 impl Js {
     fn snapshot(&self) -> String {
-        let body = r#"() => {
+        let body = r##"() => {
 __VIS__
   const comps = Array.from(document.querySelectorAll(__COMPOSER__)).filter(vis);
   const el = comps.length ? comps[comps.length - 1] : null;
   let nodes = Array.from(document.querySelectorAll(__ANSWER__)).filter(vis);
   nodes = nodes.filter((n) => !nodes.some((m) => m !== n && m.contains(n)));
   const last = nodes.length ? nodes[nodes.length - 1] : null;
-  let thinkText = '';
-  if (last) {
-    let scope = last;
-    for (let i = 0; i < 3 && scope.parentElement; i++) scope = scope.parentElement;
-    const ts = Array.from(scope.querySelectorAll(__THINK__)).filter(vis);
-    if (ts.length) thinkText = ts[ts.length - 1].innerText || '';
-  }
+
+  // Serialise the rendered answer back into Markdown. innerText would drag in
+  // the code-block chrome ("Copy", "Download", the language label) and lose
+  // block structure, so walk the DOM instead.
+  const md = (node) => {
+    if (node.nodeType === 3) return node.nodeValue.replace(/[ \t]*\n[ \t]*/g, " ").replace(/\s+/g, " ");
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    const cls = typeof node.className === "string" ? node.className : "";
+    if (["button", "svg", "style", "script", "input", "noscript", "textarea"].includes(tag)) return "";
+    if (/(^|\s)(copy|download|toolbar|code-header|code-block-banner|banner-wrap|ds-icon|icon-button)/i.test(cls)) return "";
+    if (node.getAttribute("role") === "button") return "";
+    const label = (node.getAttribute("aria-label") || "").trim();
+    if (/^(copy|download|copy code)$/i.test(label)) return "";
+
+    const inner = () => Array.from(node.childNodes).map(md).join("");
+
+    // DeepSeek wraps a fenced block as .md-code-block > banner + <pre>; the
+    // language label lives in the banner and the code lives in the <pre>.
+    if (/(^|\s)md-code-block(\s|$)/.test(cls)) {
+      const pre = node.querySelector("pre");
+      const raw = (pre || node).textContent.replace(/\n+$/, "");
+      const langEl = node.querySelector(".md-code-block-banner span");
+      const lang = langEl ? langEl.textContent.trim() : "";
+      return "\n```" + lang + "\n" + raw + "\n```\n";
+    }
+    if (tag === "pre") {
+      const code = node.querySelector("code");
+      const raw = (code || node).textContent.replace(/\n+$/, "");
+      const found = code && code.className.match(/language-([\w+#.-]+)/);
+      const lang = found ? found[1] : "";
+      return "\n```" + lang + "\n" + raw + "\n```\n";
+    }
+    if (tag === "code") return "`" + node.textContent + "`";
+    if (tag === "strong" || tag === "b") return "**" + inner().trim() + "**";
+    if (tag === "em" || tag === "i") return "*" + inner().trim() + "*";
+    if (tag === "br") return "\n";
+    if (tag === "hr") return "\n---\n";
+    if (/^h[1-6]$/.test(tag)) return "\n" + "#".repeat(Number(tag[1])) + " " + inner().trim() + "\n\n";
+    if (tag === "li") return "\n- " + inner().trim();
+    if (tag === "blockquote") return "\n> " + inner().trim().replace(/\n/g, "\n> ") + "\n";
+    if (["p", "ul", "ol", "div", "section", "article", "table", "tr"].includes(tag)) {
+      return "\n" + inner() + "\n";
+    }
+    return inner();
+  };
+
+  const asMarkdown = (node) => {
+    if (!node) return "";
+    return md(node)
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  };
+
   const btns = Array.from(document.querySelectorAll('button,[role="button"]')).filter(vis);
   const busy = btns.some((b) => {
     const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
     return /stop generating|stop responding|停止生成/.test(label) && !b.disabled;
   });
+
+  let thinkText = "";
+  if (last) {
+    let scope = last;
+    for (let i = 0; i < 3 && scope.parentElement; i++) scope = scope.parentElement;
+    const ts = Array.from(scope.querySelectorAll(__THINK__)).filter(vis);
+    if (ts.length) thinkText = asMarkdown(ts[ts.length - 1]);
+  }
+
   return {
     composer: !!el,
     composerText: el ? (el.value !== undefined && el.value !== null ? el.value : (el.innerText || '')) : '',
     count: nodes.length,
-    answer: last ? (last.innerText || '') : '',
+    answer: asMarkdown(last),
     think: thinkText,
     loginForm: !!document.querySelector('input[type="password"]'),
     busy: busy,
     title: document.title,
     href: location.href
   };
-}"#;
+}"##;
         body.replace("__VIS__", VIS)
             .replace("__COMPOSER__", &self.composer)
             .replace("__ANSWER__", &self.answer)
@@ -279,6 +336,7 @@ impl Session {
         let profile = profile_dir();
         std::fs::create_dir_all(&profile)
             .with_context(|| format!("creating profile dir {}", profile.display()))?;
+        clear_stale_lock(&profile);
 
         // The library's default args include --enable-automation, which sets
         // navigator.webdriver and makes DeepSeek's CAPTCHA loop forever. We
@@ -388,6 +446,27 @@ impl Session {
   };
 }"#;
         Ok(self.page.evaluate(js).await?.into_value()?)
+    }
+
+    /// Raw HTML of the newest answer, for `--probe` when a selector needs fixing.
+    async fn answer_html(&self) -> Result<String> {
+        let body = r##"() => {
+__VIS__
+  let nodes = Array.from(document.querySelectorAll(__ANSWER__)).filter(vis);
+  nodes = nodes.filter((n) => !nodes.some((m) => m !== n && m.contains(n)));
+  if (!nodes.length) return "";
+  return nodes[nodes.length - 1].outerHTML;
+}"##;
+        let js = body
+            .replace("__VIS__", VIS)
+            .replace("__ANSWER__", &self.js.answer);
+        let html: String = self
+            .page
+            .evaluate(js)
+            .await?
+            .into_value()
+            .unwrap_or_default();
+        Ok(html.chars().take(6000).collect())
     }
 
     /// Cookies the browser can actually decrypt, for `--probe`.
@@ -817,6 +896,7 @@ pub async fn login(cfg: Config) -> Result<()> {
     if let Some(pid) = live_profile_pid(&profile) {
         bail!("the browser is already open with this profile (pid {pid}) — close it first");
     }
+    clear_stale_lock(&profile);
 
     let browser = cfg
         .chrome
@@ -939,6 +1019,18 @@ fn persist_deepseek_cookies(conn: &rusqlite::Connection) -> Result<usize> {
     )?)
 }
 
+/// Chromium refuses to start when a previous run left its singleton files
+/// behind (a killed browser, or a recycled pid). Clear them when nothing is
+/// actually holding the profile.
+fn clear_stale_lock(profile: &std::path::Path) {
+    if live_profile_pid(profile).is_some() {
+        return;
+    }
+    for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+        let _ = std::fs::remove_file(profile.join(name));
+    }
+}
+
 fn live_profile_pid(profile: &std::path::Path) -> Option<u32> {
     let target = std::fs::read_link(profile.join("SingletonLock")).ok()?;
     let pid: u32 = target.to_string_lossy().rsplit('-').next()?.parse().ok()?;
@@ -956,9 +1048,14 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
     println!("waiting for the chat page…");
 
     let start = Instant::now();
+    let mut reported = false;
     loop {
+        if !reported && let Err(e) = session.snapshot().await {
+            reported = true;
+            eprintln!("page read failed: {e:#}");
+        }
         if let Ok(snap) = session.snapshot().await
-            && (snap.composer || start.elapsed() > Duration::from_secs(60))
+            && (snap.composer || snap.login_form || start.elapsed() > Duration::from_secs(60))
         {
             let mut report = snapshot_json(&snap);
             report["elements"] = session
@@ -970,6 +1067,11 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
                 .await
                 .unwrap_or(serde_json::Value::Null);
             report["cookies"] = session.cookies().await.unwrap_or(serde_json::Value::Null);
+            report["answerHtml"] = session
+                .answer_html()
+                .await
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
             println!("{}", serde_json::to_string_pretty(&report)?);
 
             if let Some(prompt) = say {
@@ -995,11 +1097,21 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
                 let _ = printer.await;
                 result?;
                 println!("\npipeline OK");
+                if let Ok(html) = session.answer_html().await
+                    && !html.is_empty()
+                {
+                    let short: String = html.chars().take(2500).collect();
+                    println!("\n--- answer html ---\n{short}");
+                }
             }
             return Ok(());
         }
         if start.elapsed() > Duration::from_secs(70) {
-            return Err(anyhow!("timed out waiting for the page"));
+            if let Ok(snap) = session.snapshot().await {
+                println!("{}", serde_json::to_string_pretty(&snapshot_json(&snap))?);
+                return Err(anyhow!("timed out waiting for the chat box"));
+            }
+            return Err(anyhow!("the page never became readable"));
         }
         tokio::time::sleep(Duration::from_millis(700)).await;
     }

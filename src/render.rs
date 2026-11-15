@@ -44,6 +44,9 @@ pub struct Stream<W: Write> {
     /// Swallow the rest of a line we already rendered.
     skip_line: bool,
     stars: usize,
+    /// Text received but not yet a complete line. Holding it back keeps a
+    /// reflowed partial line from being printed half-formed.
+    pending: String,
 }
 
 impl<W: Write> Stream<W> {
@@ -62,6 +65,7 @@ impl<W: Write> Stream<W> {
             opening: None,
             skip_line: false,
             stars: 0,
+            pending: String::new(),
         }
     }
 
@@ -70,20 +74,29 @@ impl<W: Write> Stream<W> {
         self.consumed
     }
 
-    /// Feed the whole answer so far; only the unseen tail is written.
+    /// Feed the whole answer so far; only complete lines are written, so a
+    /// line that is still being rendered upstream cannot come out garbled.
     pub fn feed(&mut self, full: &str) -> io::Result<()> {
         if full.len() <= self.consumed {
             return Ok(());
         }
         let delta = &full[self.consumed..];
         self.consumed = full.len();
+        self.pending.push_str(delta);
 
+        let Some(end) = self.pending.rfind('\n') else {
+            return Ok(());
+        };
+        let ready: String = self.pending.drain(..=end).collect();
+        self.emit(&ready)
+    }
+
+    fn emit(&mut self, text: &str) -> io::Result<()> {
         if !self.color {
-            self.out.write_all(delta.as_bytes())?;
+            self.out.write_all(text.as_bytes())?;
             return self.out.flush();
         }
-
-        let chars: Vec<char> = delta.chars().collect();
+        let chars: Vec<char> = text.chars().collect();
         for ch in chars {
             self.put(ch)?;
         }

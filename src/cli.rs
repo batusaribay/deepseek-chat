@@ -290,9 +290,6 @@ End a line with \\ to continue on the next one.{RESET}
     }
 
     pub async fn run(mut self) -> Result<()> {
-        if self.color {
-            println!("{DIM}deepseek-chat   /help for commands   ctrl+c to quit{RESET}");
-        }
         self.wait_ready().await?;
 
         let history = history_path();
