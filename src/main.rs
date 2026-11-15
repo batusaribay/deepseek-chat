@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod render;
 mod session;
+mod sessions;
 
 use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
@@ -17,7 +18,13 @@ use config::Config;
 /// there is no API key and no third-party server in the middle. Answers stream
 /// as text and pipe like any other command.
 #[derive(Parser, Debug)]
-#[command(name = "deepseek-chat", version, about, long_about = None)]
+#[command(
+    name = "deepseek-chat",
+    version,
+    about,
+    long_about = None,
+    color = clap::ColorChoice::Never
+)]
 struct Args {
     /// Send one prompt, print the answer, then exit
     #[arg(short = 'p', long = "print", value_name = "TEXT")]

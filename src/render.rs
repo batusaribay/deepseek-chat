@@ -12,9 +12,6 @@ const BOLD: &str = "\x1b[1m";
 const BOLD_OFF: &str = "\x1b[22m";
 const ITALIC: &str = "\x1b[3m";
 const ITALIC_OFF: &str = "\x1b[23m";
-const CODE_FG: &str = "\x1b[38;5;108m";
-const CODE_BG: &str = "\x1b[48;5;236m";
-const HEAD_FG: &str = "\x1b[38;5;75m";
 const DIM: &str = "\x1b[2m";
 const DIM_OFF: &str = "\x1b[22m";
 
@@ -31,7 +28,6 @@ enum Block {
 pub struct Stream<W: Write> {
     out: W,
     color: bool,
-    consumed: usize,
     in_fence: bool,
     line_start: bool,
     head: String,
@@ -44,8 +40,10 @@ pub struct Stream<W: Write> {
     /// Swallow the rest of a line we already rendered.
     skip_line: bool,
     stars: usize,
-    /// Text received but not yet a complete line. Holding it back keeps a
-    /// reflowed partial line from being printed half-formed.
+    /// Bytes of the current answer already written.
+    emitted: usize,
+    /// Everything after the last newline, replaced on every update so a
+    /// re-rendered tail is never printed twice or with characters missing.
     pending: String,
 }
 
@@ -54,7 +52,6 @@ impl<W: Write> Stream<W> {
         Self {
             out,
             color,
-            consumed: 0,
             in_fence: false,
             line_start: true,
             head: String::new(),
@@ -65,30 +62,31 @@ impl<W: Write> Stream<W> {
             opening: None,
             skip_line: false,
             stars: 0,
+            emitted: 0,
             pending: String::new(),
         }
     }
 
     /// How much of the answer has already been written.
     pub fn consumed(&self) -> usize {
-        self.consumed
+        self.emitted
     }
 
-    /// Feed the whole answer so far; only complete lines are written, so a
-    /// line that is still being rendered upstream cannot come out garbled.
+    /// Feed the whole answer so far. Only complete lines are written, and the
+    /// tail is re-read from the current text each time instead of being
+    /// appended, because the page re-renders while it streams.
     pub fn feed(&mut self, full: &str) -> io::Result<()> {
-        if full.len() <= self.consumed {
-            return Ok(());
-        }
-        let delta = &full[self.consumed..];
-        self.consumed = full.len();
-        self.pending.push_str(delta);
+        let end = full.rfind('\n').map(|i| i + 1).unwrap_or(0);
 
-        let Some(end) = self.pending.rfind('\n') else {
-            return Ok(());
-        };
-        let ready: String = self.pending.drain(..=end).collect();
-        self.emit(&ready)
+        if end > self.emitted && self.emitted <= full.len() {
+            let chunk = &full[self.emitted..end];
+            self.emitted = end;
+            let chunk = chunk.to_string();
+            self.emit(&chunk)?;
+        }
+
+        self.pending = full[end..].to_string();
+        Ok(())
     }
 
     fn emit(&mut self, text: &str) -> io::Result<()> {
@@ -107,6 +105,7 @@ impl<W: Write> Stream<W> {
     pub fn finish(&mut self) -> io::Result<()> {
         if !self.pending.is_empty() {
             let rest = std::mem::take(&mut self.pending);
+            self.emitted += rest.len();
             self.emit(&rest)?;
         }
         if !self.head.is_empty() {
@@ -115,7 +114,7 @@ impl<W: Write> Stream<W> {
                 Some(Block::Fence) => {}
                 Some(Block::Heading) => write!(
                     self.out,
-                    "{BOLD}{HEAD_FG}{}",
+                    "{BOLD}{}",
                     head.trim_start_matches('#').trim_start()
                 )?,
                 _ => self.out.write_all(head.as_bytes())?,
@@ -130,13 +129,8 @@ impl<W: Write> Stream<W> {
     fn put(&mut self, ch: char) -> io::Result<()> {
         if let Some(lang) = self.opening.as_mut() {
             if ch == '\n' {
-                let lang = std::mem::take(&mut self.opening).unwrap_or_default();
-                let lang = lang.trim();
-                if lang.is_empty() {
-                    writeln!(self.out, "{DIM}╭─{DIM_OFF}{RESET}")?;
-                } else {
-                    writeln!(self.out, "{DIM}╭─ {lang}{DIM_OFF}{RESET}")?;
-                }
+                self.opening = None;
+                writeln!(self.out)?;
                 self.line_start = true;
             } else {
                 lang.push(ch);
@@ -161,21 +155,22 @@ impl<W: Write> Stream<W> {
                 if self.head == "```" {
                     self.in_fence = false;
                     self.head.clear();
-                    writeln!(self.out, "{RESET}{DIM}╰─{DIM_OFF}{RESET}")?;
+                    writeln!(self.out)?;
                     self.skip_line = true;
                     return Ok(());
                 }
                 let head = std::mem::take(&mut self.head);
-                write!(self.out, "{CODE_BG}{CODE_FG}{head}")?;
+                self.out.write_all(head.as_bytes())?;
                 self.line_start = false;
                 return Ok(());
             }
             if ch == '\n' {
-                writeln!(self.out, "{RESET}")?;
+                self.out.write_all(b"\n")?;
                 self.line_start = true;
                 return Ok(());
             }
-            return write!(self.out, "{CODE_BG}{CODE_FG}{ch}");
+            let mut buf = [0u8; 4];
+            return self.out.write_all(ch.encode_utf8(&mut buf).as_bytes());
         }
 
         if self.line_start {
@@ -202,7 +197,7 @@ impl<W: Write> Stream<W> {
                 self.heading = true;
                 write!(
                     self.out,
-                    "{BOLD}{HEAD_FG}{}",
+                    "{BOLD}{}",
                     head.trim_start_matches('#').trim_start()
                 )
             }
@@ -255,7 +250,7 @@ impl<W: Write> Stream<W> {
             '`' => {
                 self.stars = 0;
                 self.code = !self.code;
-                let seq = if self.code { CODE_FG } else { RESET };
+                let seq = if self.code { DIM } else { DIM_OFF };
                 self.out.write_all(seq.as_bytes())?;
                 return Ok(());
             }
@@ -398,6 +393,21 @@ mod tests {
     }
 
     #[test]
+    fn reflow_does_not_drop_characters() {
+        // The page re-renders while streaming; a shrinking then growing text
+        // must not lose the overlap.
+        let mut out = Vec::new();
+        {
+            let mut s = Stream::new(&mut out, false);
+            s.feed("Hello wor").unwrap();
+            s.feed("Hello").unwrap();
+            s.feed("Hello world\n").unwrap();
+            s.finish().unwrap();
+        }
+        assert_eq!(String::from_utf8(out).unwrap(), "Hello world\n");
+    }
+
+    #[test]
     fn single_line_answer_is_flushed() {
         // Answers with no trailing newline are held back until finish().
         assert_eq!(render("one short sentence", false), "one short sentence");
@@ -414,7 +424,7 @@ mod tests {
     fn bold_and_code_emit_styles() {
         let out = render("**bold** and `code`\n", true);
         assert!(out.contains(BOLD));
-        assert!(out.contains(CODE_FG));
+        assert!(out.contains(DIM));
     }
 
     #[test]

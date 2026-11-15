@@ -14,8 +14,9 @@ use rustyline::error::ReadlineError;
 use crate::config::{Config, data_root};
 use crate::render::Stream;
 use crate::session::{self, Cmd, CmdTx, Ev, Status};
+use crate::sessions;
 
-const PROMPT: &str = "› ";
+const PROMPT: &str = "> ";
 const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
@@ -28,6 +29,8 @@ pub struct Cli {
     ev: session::Rx,
     color: bool,
     think: bool,
+    thinking: bool,
+    search: bool,
     signed_in: bool,
 }
 
@@ -49,6 +52,7 @@ fn tty_clear() {
 
 impl Cli {
     pub fn start(cfg: Config, color: bool, think: bool) -> Self {
+        let cfg_defaults = (cfg.thinking, cfg.search);
         let (tx, ev) = session::spawn(cfg.clone());
         Self {
             cfg,
@@ -56,6 +60,8 @@ impl Cli {
             ev,
             color,
             think,
+            thinking: cfg_defaults.0,
+            search: cfg_defaults.1,
             signed_in: false,
         }
     }
@@ -206,9 +212,8 @@ impl Cli {
                         break;
                     }
                 }
-                Some(Ev::Status(Status::Streaming)) => tty_write("answering…"),
-                Some(Ev::Status(Status::Sending)) => tty_write("sending…"),
                 Some(Ev::Status(Status::Ready)) => {}
+                Some(Ev::Status(Status::Sending | Status::Streaming)) => {}
                 Some(Ev::Status(Status::Connecting)) => tty_write("reconnecting…"),
                 Some(Ev::Status(Status::WaitingLogin)) => tty_clear(),
                 Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
@@ -246,26 +251,47 @@ impl Cli {
             "quit" | "q" | "exit" => return Ok(true),
             "new" => {
                 let _ = self.tx.send(Cmd::NewChat);
-                println!("{DIM}new conversation{RESET}\n");
+                self.thinking = self.cfg.thinking;
+                self.search = self.cfg.search;
+                println!("new conversation");
             }
             "reload" => {
                 self.tx.send(Cmd::Reload).ok();
-                println!("{DIM}reloading the page{RESET}\n");
+                println!("reloading the page");
             }
             "browser" | "focus" => {
                 self.tx.send(Cmd::Focus).ok();
-                println!("{DIM}browser raised{RESET}\n");
+                println!("browser raised");
             }
-            "think" => {
-                self.think = match arg {
-                    "on" => true,
-                    "off" => false,
-                    _ => !self.think,
-                };
+            "think" | "thinking" => {
+                self.thinking = flag(arg, self.thinking);
+                self.think = self.thinking;
+                self.apply_modes();
                 println!(
-                    "{DIM}reasoning {}{RESET}\n",
-                    if self.think { "on" } else { "off" }
+                    "thinking {} (reasoning shown at the end)",
+                    on_off(self.thinking)
                 );
+            }
+            "search" | "web" => {
+                self.search = flag(arg, self.search);
+                self.apply_modes();
+                println!("web search {}", on_off(self.search));
+            }
+            "sessions" | "chats" => {
+                if arg.is_empty() {
+                    self.list_sessions();
+                } else if let Ok(n) = arg.parse::<usize>() {
+                    let sessions = sessions::list();
+                    match sessions.get(n.wrapping_sub(1)) {
+                        Some(entry) => {
+                            let _ = self.tx.send(Cmd::Open(entry.id.clone()));
+                            println!("opening {}", entry.title);
+                        }
+                        None => println!("no session {n}"),
+                    }
+                } else {
+                    println!("usage: /sessions [number]");
+                }
             }
             "clear" => {
                 print!("\x1b[2J\x1b[H");
@@ -273,20 +299,42 @@ impl Cli {
             }
             "help" | "" => {
                 println!(
-                    "{DIM}/new      start a new conversation
-/reload   reload the page
-/browser  raise the browser window
-/think    toggle showing reasoning
-/clear    clear the screen
-/quit     exit
+                    "/new             start a new conversation
+/sessions        list conversations started here
+/sessions N      reopen conversation N
+/think [on|off]  thinking mode
+/search [on|off] web search
+/reload          reload the page
+/browser         raise the browser window
+/clear           clear the screen
+/quit            exit
 
-End a line with \\ to continue on the next one.{RESET}
-"
+End a line with \\ to continue on the next one."
                 );
             }
-            other => println!("{RED}unknown command /{other}{RESET}\n"),
+            other => println!("unknown command /{other}"),
         }
         Ok(false)
+    }
+
+    fn apply_modes(&self) {
+        let _ = self.tx.send(Cmd::SetMode {
+            thinking: self.thinking,
+            search: self.search,
+        });
+    }
+
+    fn list_sessions(&self) {
+        let sessions = sessions::list();
+        if sessions.is_empty() {
+            println!("no conversations yet");
+            return;
+        }
+        println!("  #  conversation");
+        for (i, entry) in sessions.iter().take(20).enumerate() {
+            println!("{:3}  {}", i + 1, entry.title);
+        }
+        println!("\n/sessions N to reopen one");
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -369,4 +417,16 @@ pub fn use_color(no_color_flag: bool) -> bool {
         return false;
     }
     io::stdout().is_terminal()
+}
+
+fn flag(arg: &str, current: bool) -> bool {
+    match arg {
+        "on" | "1" | "yes" | "true" => true,
+        "off" | "0" | "no" | "false" => false,
+        _ => !current,
+    }
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
 }

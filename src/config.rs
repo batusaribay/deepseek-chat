@@ -16,6 +16,10 @@ pub struct Config {
     pub headless: bool,
     /// Hide the artefacts of remote debugging (fixes most stubborn CAPTCHAs).
     pub stealth: bool,
+    /// Start conversations with the "DeepThink" chip on.
+    pub thinking: bool,
+    /// Start conversations with the "Search" chip on.
+    pub search: bool,
     /// Explicit browser binary. `None` uses the one you run day to day.
     pub chrome: Option<String>,
     pub window_width: u32,
@@ -38,6 +42,8 @@ impl Default for Config {
             url: "https://chat.deepseek.com/".into(),
             headless: true,
             stealth: true,
+            thinking: true,
+            search: true,
             chrome: None,
             window_width: 960,
             window_height: 900,

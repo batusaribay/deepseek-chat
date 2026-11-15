@@ -49,6 +49,13 @@ pub enum Cmd {
     Reload,
     Focus,
     Shutdown,
+    /// Turn thinking or web search on or off. `None` flips it.
+    SetMode {
+        thinking: bool,
+        search: bool,
+    },
+    /// Open a conversation by id.
+    Open(String),
 }
 
 #[derive(Debug, Clone)]
@@ -448,6 +455,99 @@ impl Session {
         Ok(self.page.evaluate(js).await?.into_value()?)
     }
 
+    /// Where the page is, and which conversation it is showing.
+    async fn current_url(&self) -> String {
+        self.page
+            .url()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.cfg.url.clone())
+    }
+
+    /// Flip the "DeepThink" and "Search" chips under the composer.
+    async fn set_modes(&self, thinking: bool, search: bool) -> Result<(bool, bool)> {
+        let js = format!(
+            r#"() => {{
+  const vis = (el) => {{
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  }};
+  const wantThink = {thinking};
+  const wantSearch = {search};
+  const thinkRe = /think|r1|deepthink/i;
+  const searchRe = /search|web|联网|搜索/i;
+  const toggles = Array.from(document.querySelectorAll('.ds-toggle-button')).filter(vis);
+  const apply = (re, want) => {{
+    const el = toggles.find((t) =>
+      re.test((t.innerText || '') + ' ' + (t.getAttribute('aria-label') || '')));
+    if (!el) return null;
+    const on = el.getAttribute('aria-pressed') === 'true';
+    if (on !== want) el.click();
+    return want;
+  }};
+  return [apply(thinkRe, wantThink), apply(searchRe, wantSearch)];
+}}"#
+        );
+
+        let value: Vec<Option<bool>> = self.page.evaluate(js).await?.into_value()?;
+        Ok((
+            value.first().copied().flatten().unwrap_or(false),
+            value.get(1).copied().flatten().unwrap_or(false),
+        ))
+    }
+
+    /// Controls and history entries, for `--probe`.
+    async fn ui_probe(&self) -> Result<serde_json::Value> {
+        let body = r##"() => {
+__VIS__
+  const out = { buttons: [], links: [], sessionish: [] };
+  for (const b of document.querySelectorAll('button,[role="button"]')) {
+    if (!vis(b)) continue;
+    const label = ((b.getAttribute('aria-label') || '') + ' | ' + (b.innerText || '')).trim().slice(0, 80);
+    if (!label) continue;
+    out.buttons.push({
+      label,
+      pressed: b.getAttribute('aria-pressed') || '',
+      cls: String(b.className || '').slice(0, 60)
+    });
+  }
+  for (const a of document.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href') || '';
+    if (!/chat|session|history|a\//i.test(href)) continue;
+    out.links.push({ href, text: (a.innerText || '').trim().slice(0, 60) });
+  }
+  for (const el of document.querySelectorAll('[class*="session"],[class*="history"],[class*="conversation"]')) {
+    out.sessionish.push({
+      cls: String(el.className || '').slice(0, 70),
+      text: (el.innerText || '').trim().slice(0, 50),
+      tag: el.tagName.toLowerCase()
+    });
+  }
+  out.modes = Array.from(document.querySelectorAll('.ds-toggle-button')).map((t) => ({
+    text: (t.innerText || '').trim().slice(0, 30),
+    pressed: t.getAttribute('aria-pressed')
+  }));
+  out.bodyText = (document.body.innerText || '').slice(0, 1500);
+  const comp = document.querySelector('textarea,[contenteditable="true"],[role="textbox"]');
+  out.composerHtml = '';
+  if (comp) {
+    let box = comp;
+    for (let i = 0; i < 4 && box.parentElement; i++) box = box.parentElement;
+    out.composerHtml = String(box.outerHTML).slice(0, 5000);
+  }
+  const side = document.querySelector('aside,[class*="sidebar"],[class*="sider"],[class*="history"]');
+  out.sidebarHtml = side ? String(side.outerHTML).slice(0, 2500) : '';
+  out.buttons = out.buttons.slice(0, 40);
+  out.links = out.links.slice(0, 30);
+  out.sessionish = out.sessionish.slice(0, 25);
+  return out;
+}"##;
+        let js = body.replace("__VIS__", VIS);
+        Ok(self.page.evaluate(js).await?.into_value()?)
+    }
+
     /// Raw HTML of the newest answer, for `--probe` when a selector needs fixing.
     async fn answer_html(&self) -> Result<String> {
         let body = r##"() => {
@@ -694,14 +794,14 @@ __VIS__
 
         // Wait for a new answer node to appear. If Enter did nothing, try the
         // send button once.
-        let deadline = Instant::now() + Duration::from_secs(25);
+        let deadline = Instant::now() + Duration::from_secs(240);
         let mut clicked = false;
         loop {
             let snap = self.snapshot().await?;
             if snap.count > before.count {
                 break;
             }
-            if !clicked && Instant::now().duration_since(deadline) < Duration::from_secs(18) {
+            if !clicked && Instant::now().duration_since(deadline) < Duration::from_secs(200) {
                 let sent: bool = self
                     .page
                     .evaluate(self.js.click_send())
@@ -817,6 +917,7 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
 
     match session.wait_ready(&tx).await {
         Ok(()) => {
+            let _ = session.set_modes(cfg.thinking, cfg.search).await;
             session.save_cookies().await.ok();
             let _ = tx.send(Ev::Status(Status::Ready));
         }
@@ -831,6 +932,10 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
                 let _ = tx.send(Ev::Status(Status::Sending));
                 match session.send(&text, &tx).await {
                     Ok(()) => {
+                        let url = session.current_url().await;
+                        if let Some(id) = crate::sessions::id_from_url(&url) {
+                            crate::sessions::record(id, text.lines().next().unwrap_or(""));
+                        }
                         // Cookies may rotate while chatting; keep our copy fresh.
                         session.save_cookies().await.ok();
                         let _ = tx.send(Ev::Status(Status::Ready));
@@ -869,6 +974,38 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
                 session.page.bring_to_front().await.ok();
                 let _ = tx.send(Ev::Toast("browser window raised".into()));
             }
+            Cmd::SetMode { thinking, search } => match session.set_modes(thinking, search).await {
+                Ok((think, search)) => {
+                    let _ = tx.send(Ev::Toast(format!(
+                        "thinking {} · search {}",
+                        if think { "on" } else { "off" },
+                        if search { "on" } else { "off" }
+                    )));
+                }
+                Err(e) => {
+                    let _ = tx.send(Ev::Fail(format!("{e:#}")));
+                }
+            },
+            Cmd::Open(id) => {
+                let url = format!(
+                    "{}a/chat/s/{id}",
+                    cfg.url.trim_end_matches('/').to_string() + "/"
+                );
+                let _ = tx.send(Ev::Status(Status::Connecting));
+                if let Err(e) = session.page.goto(url).await {
+                    let _ = tx.send(Ev::Fail(format!("{e:#}")));
+                    continue;
+                }
+                match session.wait_ready(&tx).await {
+                    Ok(()) => {
+                        let _ = session.set_modes(cfg.thinking, cfg.search).await;
+                        let _ = tx.send(Ev::Status(Status::Ready));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Ev::Fatal(format!("{e:#}")));
+                    }
+                }
+            }
             Cmd::Shutdown => {
                 session.save_cookies().await.ok();
                 session.close().await;
@@ -885,7 +1022,7 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
 /// DeepSeek treats a browser driven over the DevTools protocol as a new device
 /// and answers the sign-in with a CAPTCHA tied to emailed codes, which is
 /// unwinnable from an automation window. So for login we spawn a plain
-/// Chromium on dsx's own profile, let the user sign in as they would anywhere,
+/// Chromium on this project's own profile, let the user sign in as they would,
 /// and when the window closes we make the session cookie persistent.
 pub async fn login(cfg: Config) -> Result<()> {
     use std::io::IsTerminal;
@@ -1057,6 +1194,9 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
         if let Ok(snap) = session.snapshot().await
             && (snap.composer || snap.login_form || start.elapsed() > Duration::from_secs(60))
         {
+            let _ = session.set_modes(cfg.thinking, cfg.search).await;
+            tokio::time::sleep(Duration::from_millis(400)).await;
+
             let mut report = snapshot_json(&snap);
             report["elements"] = session
                 .candidates()
@@ -1067,6 +1207,7 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
                 .await
                 .unwrap_or(serde_json::Value::Null);
             report["cookies"] = session.cookies().await.unwrap_or(serde_json::Value::Null);
+            report["ui"] = session.ui_probe().await.unwrap_or(serde_json::Value::Null);
             report["answerHtml"] = session
                 .answer_html()
                 .await
