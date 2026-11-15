@@ -63,6 +63,7 @@ impl Cli {
     /// Block until the browser is on the page and the composer exists.
     async fn wait_ready(&mut self) -> Result<()> {
         let mut hinted = false;
+        let mut login_since: Option<std::time::Instant> = None;
         let deadline = std::time::Instant::now() + Duration::from_secs(180);
         let ctrl = tokio::signal::ctrl_c();
         tokio::pin!(ctrl);
@@ -90,7 +91,10 @@ impl Cli {
                     Ev::Status(Status::Connecting) => tty_write("starting browser…"),
                     Ev::Status(Status::WaitingLogin) => {
                         tty_clear();
-                        if self.cfg.headless {
+                        login_since.get_or_insert_with(std::time::Instant::now);
+                        if self.cfg.headless
+                            && login_since.is_some_and(|at| at.elapsed() > Duration::from_secs(5))
+                        {
                             bail!(
                                 "not signed in — run `deepseek-chat --login` once to sign in\n\
                                  (the browser needs a window for that; after that headless works)"
@@ -113,6 +117,11 @@ impl Cli {
                              {DIM}This continues on its own once the chat box appears.{RESET}\n\
                              {DIM}If a CAPTCHA keeps failing, use your password instead of the emailed code.{RESET}"
                         );
+                    }
+                    Ev::Fatal(msg) => {
+                        tty_clear();
+                        self.shutdown().await;
+                        bail!("{msg}");
                     }
                     Ev::Fail(msg) => {
                         tty_clear();
@@ -202,7 +211,7 @@ impl Cli {
                 Some(Ev::Status(Status::Ready)) => {}
                 Some(Ev::Status(Status::Connecting)) => tty_write("reconnecting…"),
                 Some(Ev::Status(Status::WaitingLogin)) => tty_clear(),
-                Some(Ev::Fail(msg)) => {
+                Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
                     tty_clear();
                     eprintln!("{RED}! {msg}{RESET}");
                 }
@@ -320,16 +329,30 @@ End a line with \\ to continue on the next one.{RESET}
         if let Some(path) = history {
             let _ = rl.save_history(&path);
         }
+        self.shutdown().await;
         if self.color {
             println!("{DIM}bye{RESET}");
         }
         Ok(())
     }
 
+    /// Give the worker a moment to close the browser so cookies are flushed.
+    async fn shutdown(&mut self) {
+        if self.tx.send(Cmd::Shutdown).is_err() {
+            return;
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(8), async {
+            while self.ev.recv().await.is_some() {}
+        })
+        .await;
+    }
+
     /// One prompt, one answer, exit. Used by `-p` and by piped stdin.
     pub async fn once(mut self, prompt: String) -> Result<()> {
         self.wait_ready().await?;
-        if self.send(&prompt).await? {
+        let sent = self.send(&prompt).await?;
+        self.shutdown().await;
+        if sent {
             Ok(())
         } else {
             std::process::exit(130);

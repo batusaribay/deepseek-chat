@@ -48,6 +48,7 @@ pub enum Cmd {
     NewChat,
     Reload,
     Focus,
+    Shutdown,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,8 @@ pub enum Ev {
     },
     Toast(String),
     Fail(String),
+    /// The page never became usable; the CLI should stop waiting.
+    Fatal(String),
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -265,7 +268,7 @@ pub fn session_file() -> std::path::PathBuf {
 }
 
 pub struct Session {
-    _browser: Browser,
+    browser: Browser,
     page: Page,
     cfg: Config,
     js: Js,
@@ -339,7 +342,7 @@ impl Session {
         }
 
         let session = Self {
-            _browser: browser,
+            browser,
             page,
             js: js(&cfg),
             cfg,
@@ -446,6 +449,7 @@ __VIS__
                 if snap.login_form {
                     if !announced_login {
                         announced_login = true;
+                        let _ = tx.send(Ev::Status(Status::WaitingLogin));
                         let _ = tx.send(Ev::Login(true));
                         let hint = if self.cfg.headless {
                             "not signed in — run `deepseek-chat --headed` once to log in"
@@ -535,6 +539,15 @@ __VIS__
             }
         }
         Ok(restored)
+    }
+
+    /// Close the browser politely so it writes its cookie database to disk.
+    /// Killing it instead loses any cookie it rotated during the session.
+    async fn close(mut self) {
+        if let Ok(cmd) = self.browser.close().await {
+            let _ = cmd;
+            self.browser.wait().await.ok();
+        }
     }
 
     async fn press_enter(&self) -> Result<()> {
@@ -723,15 +736,13 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
         }
     };
 
-    let _ = tx.send(Ev::Status(Status::WaitingLogin));
     match session.wait_ready(&tx).await {
         Ok(()) => {
             session.save_cookies().await.ok();
             let _ = tx.send(Ev::Status(Status::Ready));
         }
         Err(e) => {
-            let _ = tx.send(Ev::Fail(format!("{e:#}")));
-            let _ = tx.send(Ev::Status(Status::Ready));
+            let _ = tx.send(Ev::Fatal(format!("{e:#}")));
         }
     }
 
@@ -778,6 +789,11 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
             Cmd::Focus => {
                 session.page.bring_to_front().await.ok();
                 let _ = tx.send(Ev::Toast("browser window raised".into()));
+            }
+            Cmd::Shutdown => {
+                session.save_cookies().await.ok();
+                session.close().await;
+                break;
             }
         }
     }
