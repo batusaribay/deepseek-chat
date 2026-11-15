@@ -1,0 +1,12 @@
+$ deepseek-chat
+› why is the sky blue?
+
+Sunlight looks white, but it is a mix of every colour. As it enters the
+atmosphere, it scatters off air molecules, and blue scatters far more than
+red because its wavelength is shorter.
+
+That scattered blue reaches your eyes from every direction, so the whole sky
+glows. At sunset the light travels much further through the air, the blue is
+scattered away, and what is left is orange and red.
+
+› 

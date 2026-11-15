@@ -4,12 +4,10 @@ DeepSeek in your terminal.
 
 ![deepseek-chat in a terminal](preview.png)
 
-> **Read this first.** This tool automates a website that does not permit
-> automation. DeepSeek's terms of service forbid it, and using it can get your
-> account **banned** — the author's account was suspended for three days while
-> developing it. It also cannot be trusted to leave your own browser session
-> alone if you sign in with the same account there. If losing the account
-> matters to you, do not use this; use the official API instead.
+> **Read this first.** This automates a website that does not permit
+> automation. DeepSeek's terms forbid it, and accounts can be **banned** — mine
+> was suspended for three days while building this. If losing the account
+> matters to you, use the official API instead.
 
 ## What it is
 
@@ -28,26 +26,13 @@ loop or a script.
 
 ## Why this exists
 
-Talking to a model from a terminal usually means one of two things: paying for
-API tokens, or opening a browser tab. This is a third option that keeps the
-free web experience but moves it to where the work actually happens — the shell.
+I wanted DeepSeek in my terminal, and I wanted an excuse to write a small Rust
+program around a real browser. DeepSeek has no keyless API, so this drives the
+web chat the way a person would: one conversation, one message at a time.
 
-Plainly, so there is no ambiguity about what this project is for:
-
-- It is for a person chatting. One message, one answer, at a human pace.
-- It is **not** a botting tool. Nothing here runs unattended, sends in bulk,
-  farms accounts, scrapes conversations, or pools sessions together.
-- It does **not** bypass DeepSeek's limits, paywalls or authentication. You
-  sign in with your own account, and the free tier you see in the browser is
-  the same free tier you get here.
-- It **does not** call private endpoints. It drives the visible page, the same
-  way your hands would.
-
-The point is convenience, not extraction. That said, convenience is not
-permission: the paragraph at the top of this file is the honest summary. If you
-want something unambiguously sanctioned for programmatic work, use their API at
-<https://platform.deepseek.com>. It is free to create a key and it is the right
-tool for anything automated.
+It is a learning project, not a service. Nothing here is built for scraping,
+bulk use, or getting around limits; if you need something reliable and
+sanctioned, the API is the right tool.
 
 ## How it works
 
@@ -157,8 +142,6 @@ without sending a message.
 cargo install --git https://github.com/batusaribay/deepseek-chat.git --locked
 ```
 
-The binary is installed as `deepseek-chat`.
-
 ## Uninstall
 
 ```bash
@@ -181,27 +164,6 @@ rm -rf ~/.config/deepseek-chat ~/.local/share/deepseek-chat
 Omarchy 4.5.0-3 (Arch Linux), Chromium 155, Wayland. Nothing else has been
 tried; other Linux desktops should work, and macOS or Windows have not been
 tested at all.
-
-## Files
-
-```text
-src/main.rs      CLI, flags, startup, sign-in fallback
-src/cli.rs       the prompt, streaming output, slash commands
-src/session.rs   browser control, page reading, mode chips, cookies
-src/render.rs    Markdown to plain text, wrapping and stream handling
-src/sessions.rs  local index behind /conversations
-src/config.rs    paths and settings
-preview.png      README preview image
-```
-
-## Development
-
-```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo build --release
-```
 
 ## Known Issues
 
