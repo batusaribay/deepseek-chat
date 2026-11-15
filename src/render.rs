@@ -105,6 +105,10 @@ impl<W: Write> Stream<W> {
 
     /// Flush anything held back and leave the terminal in a clean state.
     pub fn finish(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            let rest = std::mem::take(&mut self.pending);
+            self.emit(&rest)?;
+        }
         if !self.head.is_empty() {
             let head = std::mem::take(&mut self.head);
             match classify(&head) {
@@ -391,6 +395,13 @@ mod tests {
     fn bullets_and_quotes() {
         let out = plain("- item\n> quoted\n");
         assert_eq!(out, "• item\n│ quoted\n");
+    }
+
+    #[test]
+    fn single_line_answer_is_flushed() {
+        // Answers with no trailing newline are held back until finish().
+        assert_eq!(render("one short sentence", false), "one short sentence");
+        assert_eq!(plain("one short sentence"), "one short sentence");
     }
 
     #[test]
