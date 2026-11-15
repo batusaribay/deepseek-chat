@@ -64,14 +64,22 @@ free to create a key and it is the right tool for anything automated.
 deepseek-chat --login
 ```
 
-A browser window opens on DeepSeek's sign-in page. Sign in, and the moment the
-chat box appears the command prints `✓ signed in`, saves the session and drops
-you into the chat prompt. After that no window is needed.
+This opens a **normal browser window** — no debugging port, no automation
+flags, nothing attached to it at all. Sign in the way you normally would, then
+close the window (or press `enter` in the terminal if it keeps running in the
+background).
 
-Use your password rather than the emailed one-time code; the code flow adds a
-CAPTCHA that is fussier in an automated browser. If the CAPTCHA still refuses,
-run `--login` again — the browser is opened with the automation marker removed,
-which is what most CAPTCHA loops trip on.
+dsx then marks the session cookie persistent at the profile level, reloads the
+page once to confirm the chat interface actually appears, and tells you whether
+it worked. From then on no window is needed.
+
+Why it is done this way: DeepSeek treats a browser driven over the DevTools
+protocol as a new device, and answers with an emailed-code CAPTCHA that cannot
+be completed from an automation window. Signing in with a plain browser avoids
+that entirely — the login looks exactly like your daily browsing, because it
+is. Everything after login is ordinary page interaction.
+
+If you normally sign in with Google or Apple, that works here too.
 
 ### Chatting
 
@@ -104,7 +112,7 @@ scroll back, `ctrl+c` quits.
 | Flag | Action |
 | --- | --- |
 | `-p`, `--print <TEXT>` | one prompt, print the answer, exit |
-| `--login` | open a window and sign in |
+| `--login` | sign in with a plain browser window |
 | `--headed` | show the browser window |
 | `--headless` | no window (default) |
 | `--think` | also print the reasoning |

@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
 use chromiumoxide::page::Page;
@@ -785,6 +785,155 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
 
 /// `deepseek-chat --probe`: report what the page looks like, then exit. Handy after a
 /// DeepSeek frontend update, when a selector needs adjusting.
+/// Sign in with a browser that has *nothing* automated attached to it.
+///
+/// DeepSeek treats a browser driven over the DevTools protocol as a new device
+/// and answers the sign-in with a CAPTCHA tied to emailed codes, which is
+/// unwinnable from an automation window. So for login we spawn a plain
+/// Chromium on dsx's own profile, let the user sign in as they would anywhere,
+/// and when the window closes we make the session cookie persistent.
+pub async fn login(cfg: Config) -> Result<()> {
+    use std::io::IsTerminal;
+
+    let profile = profile_dir();
+    std::fs::create_dir_all(&profile).with_context(|| format!("creating {}", profile.display()))?;
+
+    if let Some(pid) = live_profile_pid(&profile) {
+        bail!("the browser is already open with this profile (pid {pid}) — close it first");
+    }
+
+    let browser = cfg
+        .chrome
+        .clone()
+        .or_else(default_browser)
+        .unwrap_or_else(|| "chromium".to_string());
+
+    println!("Opening a normal {browser} window — no debugging port, no automation.");
+    println!("Sign in the way you usually do, then close the window.");
+    println!("If the window stays open in the background, press enter here instead.\n");
+
+    let mut child = tokio::process::Command::new(&browser)
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg(&cfg.url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("could not start {browser}"))?;
+
+    let db = profile.join("Default").join("Cookies");
+
+    let exited = if std::io::stdin().is_terminal() {
+        let enter = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+        });
+        tokio::select! {
+            _ = child.wait() => true,
+            _ = enter => false,
+        }
+    } else {
+        loop {
+            if child.try_wait().ok().flatten().is_some() {
+                break true;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+
+    if !exited {
+        shutdown(&mut child).await;
+    }
+
+    if !db.exists() {
+        bail!("no browser profile was written — did the browser start?");
+    }
+
+    // Mark the session cookies persistent so the next start keeps them.
+    {
+        let conn =
+            rusqlite::Connection::open(&db).with_context(|| format!("opening {}", db.display()))?;
+        persist_deepseek_cookies(&conn)?;
+    }
+
+    // The profile is authoritative now; an older copy would only interfere.
+    let _ = std::fs::remove_file(session_file());
+
+    println!("checking the session…");
+    let mut verify = cfg.clone();
+    verify.headless = true;
+    let session = Session::open(verify).await?;
+
+    let mut signed_in = false;
+    for _ in 0..30 {
+        if let Ok(snap) = session.snapshot().await
+            && snap.composer
+        {
+            signed_in = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    if signed_in {
+        session.save_cookies().await.ok();
+        println!("\n✓ signed in and verified. Now just run `deepseek-chat`.");
+        Ok(())
+    } else {
+        bail!(
+            "that did not produce a signed-in session.\n\
+             Run `deepseek-chat --login` again and sign in until the chat page \n\
+             itself is open, then close the window."
+        )
+    }
+}
+
+/// Ask the browser to exit so it flushes its cookie database, then insist.
+async fn shutdown(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    if tokio::time::timeout(Duration::from_secs(8), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+}
+
+/// A session cookie is dropped by the next browser start. Turn the ones we
+/// found into persistent cookies, in place: the encrypted values are left
+/// exactly as they are, only the expiry metadata changes.
+fn persist_deepseek_cookies(conn: &rusqlite::Connection) -> Result<usize> {
+    let future = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        + 116_444_736_000
+        + 180 * 86_400;
+
+    Ok(conn.execute(
+        "update cookies set expires_utc = ?1, has_expires = 1, is_persistent = 1
+         where host_key like '%deepseek%' and (expires_utc = 0 or has_expires = 0)",
+        [future * 1_000_000],
+    )?)
+}
+
+fn live_profile_pid(profile: &std::path::Path) -> Option<u32> {
+    let target = std::fs::read_link(profile.join("SingletonLock")).ok()?;
+    let pid: u32 = target.to_string_lossy().rsplit('-').next()?.parse().ok()?;
+
+    // A leftover lock from a process that already exited (or is a zombie) is
+    // not a running browser.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let state = stat.rsplit(')').next()?.split_whitespace().next()?;
+    (state != "Z").then_some(pid)
+}
+
 pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
     println!("launching Chromium…");
     let session = Session::open(cfg.clone()).await?;
@@ -864,4 +1013,45 @@ fn snapshot_json(s: &Snapshot) -> serde_json::Value {
         "answerPreview": s.answer.chars().take(400).collect::<String>(),
         "thinkPreview": s.think.chars().take(400).collect::<String>(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_deepseek_cookies;
+
+    #[test]
+    fn session_cookies_become_persistent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table cookies (
+                host_key text, name text, expires_utc integer,
+                has_expires integer, is_persistent integer
+            );
+            insert into cookies values ('chat.deepseek.com', 'ds_session_id', 0, 0, 0);
+            insert into cookies values ('example.com', 'keep', 0, 0, 0);",
+        )
+        .unwrap();
+
+        assert_eq!(persist_deepseek_cookies(&conn).unwrap(), 1);
+
+        let (expires, has, persistent): (i64, i64, i64) = conn
+            .query_row(
+                "select expires_utc, has_expires, is_persistent from cookies
+                 where name = 'ds_session_id'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(expires > 0);
+        assert_eq!((has, persistent), (1, 1));
+
+        let untouched: i64 = conn
+            .query_row(
+                "select expires_utc from cookies where name = 'keep'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(untouched, 0);
+    }
 }

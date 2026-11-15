@@ -81,11 +81,8 @@ impl Config {
                 let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
             }
         }
-        std::fs::write(
-            &path,
-            format!("{HEADER}{}", toml::to_string_pretty(self)?),
-        )
-        .with_context(|| format!("writing {}", path.display()))
+        std::fs::write(&path, format!("{HEADER}{}", toml::to_string_pretty(self)?))
+            .with_context(|| format!("writing {}", path.display()))
     }
 }
 

@@ -27,7 +27,7 @@ struct Args {
     #[arg(value_name = "QUESTION")]
     question: Option<String>,
 
-    /// Open a browser window and sign in (needed once)
+    /// Sign in with a plain browser window (needed once)
     #[arg(long)]
     login: bool,
 
@@ -110,6 +110,12 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+
+    if args.login {
+        let result = runtime.block_on(session::login(cfg));
+        runtime.shutdown_timeout(std::time::Duration::from_millis(500));
+        return result;
+    }
 
     if args.probe {
         let result = runtime.block_on(session::probe(cfg, args.say));
