@@ -4,8 +4,8 @@ DeepSeek in your terminal.
 
 ![deepseek-chat in a terminal](preview.png)
 
-> **Read this first.** This automates a website that does not permit
-> automation. DeepSeek's terms forbid it, and accounts can be **banned** — mine
+> Read this first. This automates a website that does not permit
+> automation. DeepSeek's terms forbid it, and accounts can be banned — mine
 > was suspended for three days while building this. If losing the account
 > matters to you, use the official API instead.
 
@@ -26,12 +26,18 @@ loop or a script.
 
 ## Why this exists
 
-I wanted DeepSeek in my terminal, and I wanted an excuse to write a small Rust
-program around a real browser. DeepSeek has no keyless API, so this drives the
-web chat the way a person would: one conversation, one message at a time.
+Two reasons.
 
-It is a learning project, not a service. Nothing here is built for scraping,
-bulk use, or getting around limits; if you need something reliable and
+Everything is better in a terminal. No window to hunt for, no tab lost behind
+twenty others, no context switch: the conversation sits in the same scrollback
+as your commands, and its output pipes, greps and scrolls back like any other
+program.
+
+And I wanted to see how far browser automation can go before the other end
+notices. DeepSeek has no keyless API, so the website is the only way in, which
+makes it a fair test of that question rather than a way around it.
+
+It is a learning project, not a service. If you need something reliable and
 sanctioned, the API is the right tool.
 
 ## How it works
@@ -136,7 +142,7 @@ without sending a message.
 
 ## Installation
 
-**Requirements:** Rust 1.88+ and Chromium or Google Chrome on `PATH`.
+Requirements: Rust 1.88+ and Chromium or Google Chrome on `PATH`.
 
 ```bash
 cargo install --git https://github.com/batusaribay/deepseek-chat.git --locked
@@ -167,9 +173,9 @@ tested at all.
 
 ## Known Issues
 
-- **Account bans.** This is the big one. DeepSeek does not allow automation and
+- Account bans. This is the big one. DeepSeek does not allow automation and
   has suspended accounts for it. Running this is a risk you accept.
-- **Your web session can be affected.** The same account signed in here and in
+- Your web session can be affected. The same account signed in here and in
   your browser is two sessions on one account; in the author's case the browser
   session was signed out.
 - It is browser automation. DeepSeek can change the page at any time, and a
