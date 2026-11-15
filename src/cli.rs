@@ -1,7 +1,7 @@
 //! Terminal front end: a prompt, streamed answers, and nothing else.
 //!
-//! No alternate screen, no full-screen app. Output goes to stdout, so it pipes,
-//! redirects, and scrolls back like any other command.
+//! No alternate screen, no colours, no full-screen app. Output goes to stdout,
+//! so it pipes, redirects and scrolls back like any other command.
 
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
@@ -16,28 +16,21 @@ use crate::render::Stream;
 use crate::session::{self, Cmd, CmdTx, Ev, Status};
 use crate::sessions;
 
-const PROMPT: &str = "> ";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const RESET: &str = "\x1b[0m";
-const YELLOW: &str = "\x1b[33m";
-const RED: &str = "\x1b[31m";
+const PROMPT: &str = "› ";
 
 pub struct Cli {
     cfg: Config,
     tx: CmdTx,
     ev: session::Rx,
-    color: bool,
     think: bool,
     thinking: bool,
     search: bool,
-    signed_in: bool,
 }
 
 fn tty_write(msg: &str) {
     if io::stderr().is_terminal() {
         let mut err = io::stderr();
-        let _ = write!(err, "\r\x1b[K{msg}");
+        let _ = write!(err, "\r{msg}\x1b[K");
         let _ = err.flush();
     }
 }
@@ -51,78 +44,65 @@ fn tty_clear() {
 }
 
 impl Cli {
-    pub fn start(cfg: Config, color: bool, think: bool) -> Self {
-        let cfg_defaults = (cfg.thinking, cfg.search);
+    pub fn start(cfg: Config, think: bool) -> Self {
+        let thinking = cfg.thinking;
+        let search = cfg.search;
         let (tx, ev) = session::spawn(cfg.clone());
         Self {
             cfg,
             tx,
             ev,
-            color,
             think,
-            thinking: cfg_defaults.0,
-            search: cfg_defaults.1,
-            signed_in: false,
+            thinking,
+            search,
         }
     }
 
     /// Block until the browser is on the page and the composer exists.
     async fn wait_ready(&mut self) -> Result<()> {
-        let mut hinted = false;
         let mut login_since: Option<std::time::Instant> = None;
-        let deadline = std::time::Instant::now() + Duration::from_secs(180);
+        let deadline = std::time::Instant::now() + Duration::from_secs(240);
         let ctrl = tokio::signal::ctrl_c();
         tokio::pin!(ctrl);
+
         loop {
             if std::time::Instant::now() > deadline {
                 tty_clear();
                 bail!("timed out starting the browser");
             }
-            let ev = tokio::select! {
-                _ = &mut ctrl => bail!("interrupted"),
+
+            let event = tokio::select! {
+                _ = &mut ctrl => {
+                    self.shutdown().await;
+                    return Err(anyhow::anyhow!("interrupted"));
+                }
                 r = tokio::time::timeout(Duration::from_secs(30), self.ev.recv()) => r,
             };
-            match ev {
+
+            match event {
                 Err(_) => continue,
                 Ok(None) => bail!("the browser session ended"),
                 Ok(Some(ev)) => match ev {
                     Ev::Status(Status::Ready) => {
                         tty_clear();
-                        self.signed_in = true;
-                        if hinted {
-                            eprintln!("{GREEN}✓ signed in{RESET} {DIM}(session saved){RESET}");
-                        }
                         return Ok(());
                     }
                     Ev::Status(Status::Connecting) => tty_write("starting browser…"),
                     Ev::Status(Status::WaitingLogin) => {
                         tty_clear();
+                        if self.cfg.headless {
+                            self.shutdown().await;
+                            bail!("login required");
+                        }
                         login_since.get_or_insert_with(std::time::Instant::now);
-                        if self.cfg.headless
-                            && login_since.is_some_and(|at| at.elapsed() > Duration::from_secs(5))
-                        {
-                            bail!(
-                                "not signed in — run `deepseek-chat --login` once to sign in\n\
-                                 (the browser needs a window for that; after that headless works)"
+                        if login_since.is_some_and(|at| at.elapsed() > Duration::from_secs(300)) {
+                            bail!("still not signed in");
+                        }
+                        if login_since.is_some_and(|at| at.elapsed() < Duration::from_millis(300)) {
+                            println!(
+                                "Sign in in the browser window, then this continues on its own."
                             );
                         }
-                        if !hinted {
-                            hinted = true;
-                            eprintln!(
-                                "{YELLOW}Sign in in the browser window.{RESET} \
-                                 {DIM}This continues on its own once the chat box appears.{RESET}\n\
-                                 {DIM}If a CAPTCHA keeps failing, use your password instead of the emailed code.{RESET}"
-                            );
-                        }
-                    }
-                    Ev::Login(true) if !hinted => {
-                        hinted = true;
-                        tty_clear();
-                        eprintln!(
-                            "{YELLOW}Sign in in the browser window.{RESET} \
-                             {DIM}This continues on its own once the chat box appears.{RESET}\n\
-                             {DIM}If a CAPTCHA keeps failing, use your password instead of the emailed code.{RESET}"
-                        );
                     }
                     Ev::Fatal(msg) => {
                         tty_clear();
@@ -131,7 +111,7 @@ impl Cli {
                     }
                     Ev::Fail(msg) => {
                         tty_clear();
-                        eprintln!("{RED}! {msg}{RESET}");
+                        eprintln!("! {msg}");
                     }
                     _ => {}
                 },
@@ -161,9 +141,10 @@ impl Cli {
                     println!();
                     return Ok(Some("/quit".into()));
                 }
-                Err(ReadlineError::Eof) => return Ok(Some("/quit".into())),
+                Err(ReadlineError::Eof) => println!(),
                 Err(e) => return Err(e.into()),
             }
+            return Ok(Some("/quit".into()));
         }
     }
 
@@ -172,7 +153,7 @@ impl Cli {
             bail!("the browser session ended");
         }
 
-        let mut stream = Stream::new(io::stdout(), self.color);
+        let mut stream = Stream::new(io::stdout());
         let mut think = String::new();
         let mut got_answer = false;
         tty_write("thinking…");
@@ -188,6 +169,7 @@ impl Cli {
                 }
                 ev = self.ev.recv() => ev,
             };
+
             match next {
                 None => {
                     tty_clear();
@@ -212,31 +194,27 @@ impl Cli {
                         break;
                     }
                 }
-                Some(Ev::Status(Status::Ready)) => {}
-                Some(Ev::Status(Status::Sending | Status::Streaming)) => {}
-                Some(Ev::Status(Status::Connecting)) => tty_write("reconnecting…"),
-                Some(Ev::Status(Status::WaitingLogin)) => tty_clear(),
+                Some(Ev::Status(_)) => {}
                 Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
                     tty_clear();
-                    eprintln!("{RED}! {msg}{RESET}");
+                    eprintln!("! {msg}");
                 }
                 Some(Ev::Toast(msg)) => {
                     tty_clear();
-                    eprintln!("{DIM}{msg}{RESET}");
+                    eprintln!("{msg}");
                 }
-                Some(Ev::Login(_)) => {}
             }
         }
 
         tty_clear();
         stream.finish()?;
         if !got_answer {
-            println!("{RED}(no answer captured — try `deepseek-chat --probe`){RESET}");
+            println!("(no answer captured — try `deepseek-chat --probe`)");
         }
         if self.think && !think.trim().is_empty() {
             println!();
-            println!("{DIM}[reasoning]{RESET}");
-            println!("{DIM}{}{RESET}", think.trim());
+            println!("[reasoning]");
+            println!("{}", think.trim());
         }
         println!();
         Ok(true)
@@ -267,30 +245,27 @@ impl Cli {
                 self.thinking = flag(arg, self.thinking);
                 self.think = self.thinking;
                 self.apply_modes();
-                println!(
-                    "thinking {} (reasoning shown at the end)",
-                    on_off(self.thinking)
-                );
+                println!("thinking {}", on_off(self.thinking));
             }
             "search" | "web" => {
                 self.search = flag(arg, self.search);
                 self.apply_modes();
                 println!("web search {}", on_off(self.search));
             }
-            "sessions" | "chats" => {
+            "conversations" | "chats" | "sessions" => {
                 if arg.is_empty() {
-                    self.list_sessions();
+                    self.list_conversations();
                 } else if let Ok(n) = arg.parse::<usize>() {
-                    let sessions = sessions::list();
-                    match sessions.get(n.wrapping_sub(1)) {
+                    let entries = sessions::list();
+                    match entries.get(n.wrapping_sub(1)) {
                         Some(entry) => {
                             let _ = self.tx.send(Cmd::Open(entry.id.clone()));
                             println!("opening {}", entry.title);
                         }
-                        None => println!("no session {n}"),
+                        None => println!("no conversation {n}"),
                     }
                 } else {
-                    println!("usage: /sessions [number]");
+                    println!("usage: /conversations [number]");
                 }
             }
             "clear" => {
@@ -299,15 +274,15 @@ impl Cli {
             }
             "help" | "" => {
                 println!(
-                    "/new             start a new conversation
-/sessions        list conversations started here
-/sessions N      reopen conversation N
-/think [on|off]  thinking mode
-/search [on|off] web search
-/reload          reload the page
-/browser         raise the browser window
-/clear           clear the screen
-/quit            exit
+                    "/conversations        list conversations started here
+/conversations N      reopen conversation N
+/new                  start a new conversation
+/think [on|off]       thinking mode
+/search [on|off]      web search
+/reload               reload the page
+/browser              raise the browser window
+/clear                clear the screen
+/quit                 exit
 
 End a line with \\ to continue on the next one."
                 );
@@ -324,17 +299,16 @@ End a line with \\ to continue on the next one."
         });
     }
 
-    fn list_sessions(&self) {
-        let sessions = sessions::list();
-        if sessions.is_empty() {
+    fn list_conversations(&self) {
+        let entries = sessions::list();
+        if entries.is_empty() {
             println!("no conversations yet");
             return;
         }
-        println!("  #  conversation");
-        for (i, entry) in sessions.iter().take(20).enumerate() {
+        for (i, entry) in entries.iter().take(20).enumerate() {
             println!("{:3}  {}", i + 1, entry.title);
         }
-        println!("\n/sessions N to reopen one");
+        println!("\n/conversations N to reopen one");
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -351,7 +325,7 @@ End a line with \\ to continue on the next one."
                 Ok(Some(line)) => line,
                 Ok(None) => continue,
                 Err(e) => {
-                    eprintln!("{RED}{e}{RESET}");
+                    eprintln!("{e}");
                     continue;
                 }
             };
@@ -367,7 +341,13 @@ End a line with \\ to continue on the next one."
             match self.send(line.trim_end()).await {
                 Ok(true) => {}
                 Ok(false) => break,
-                Err(e) => eprintln!("{RED}! {e:#}{RESET}"),
+                Err(e) => {
+                    if e.to_string() == "login required" {
+                        self.shutdown().await;
+                        return Err(e);
+                    }
+                    eprintln!("! {e:#}");
+                }
             }
         }
 
@@ -375,10 +355,19 @@ End a line with \\ to continue on the next one."
             let _ = rl.save_history(&path);
         }
         self.shutdown().await;
-        if self.color {
-            println!("{DIM}bye{RESET}");
-        }
         Ok(())
+    }
+
+    /// One prompt, one answer, exit.
+    pub async fn once(mut self, prompt: String) -> Result<()> {
+        self.wait_ready().await?;
+        let sent = self.send(&prompt).await?;
+        self.shutdown().await;
+        if sent {
+            Ok(())
+        } else {
+            std::process::exit(130);
+        }
     }
 
     /// Give the worker a moment to close the browser so cookies are flushed.
@@ -391,32 +380,12 @@ End a line with \\ to continue on the next one."
         })
         .await;
     }
-
-    /// One prompt, one answer, exit. Used by `-p` and by piped stdin.
-    pub async fn once(mut self, prompt: String) -> Result<()> {
-        self.wait_ready().await?;
-        let sent = self.send(&prompt).await?;
-        self.shutdown().await;
-        if sent {
-            Ok(())
-        } else {
-            std::process::exit(130);
-        }
-    }
 }
 
 fn history_path() -> Option<PathBuf> {
     let dir = data_root();
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("history.txt"))
-}
-
-/// Should output be styled?
-pub fn use_color(no_color_flag: bool) -> bool {
-    if no_color_flag || std::env::var_os("NO_COLOR").is_some() {
-        return false;
-    }
-    io::stdout().is_terminal()
 }
 
 fn flag(arg: &str, current: bool) -> bool {

@@ -61,7 +61,6 @@ pub enum Cmd {
 #[derive(Debug, Clone)]
 pub enum Ev {
     Status(Status),
-    Login(bool),
     Answer {
         text: String,
         think: String,
@@ -315,22 +314,6 @@ fn desktop_user_agent(product: &str) -> Option<String> {
     ))
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct SavedCookie {
-    name: String,
-    value: String,
-    domain: String,
-    path: String,
-    #[serde(default)]
-    secure: bool,
-    #[serde(default)]
-    http_only: bool,
-}
-
-pub fn session_file() -> std::path::PathBuf {
-    crate::config::data_root().join("session.json")
-}
-
 pub struct Session {
     browser: Browser,
     page: Page,
@@ -412,8 +395,6 @@ impl Session {
             js: js(&cfg),
             cfg,
         };
-        session.load_cookies().await.ok();
-
         session
             .page
             .goto(session.cfg.url.clone())
@@ -622,14 +603,12 @@ __VIS__
                     if announced_login {
                         let _ = tx.send(Ev::Toast("signed in — you're good to go".into()));
                     }
-                    let _ = tx.send(Ev::Login(false));
                     return Ok(());
                 }
                 if snap.login_form {
                     if !announced_login {
                         announced_login = true;
                         let _ = tx.send(Ev::Status(Status::WaitingLogin));
-                        let _ = tx.send(Ev::Login(true));
                         let hint = if self.cfg.headless {
                             "not signed in — run `deepseek-chat --headed` once to log in"
                         } else {
@@ -649,48 +628,13 @@ __VIS__
         }
     }
 
-    /// Save the decrypted session cookies to the project's own file. Chromium batches
-    /// cookie writes and we kill it on exit, so relying on its database alone
-    /// would occasionally lose a fresh login.
-    async fn save_cookies(&self) -> Result<usize> {
-        let cookies = self.page.get_cookies().await?;
-        let saved: Vec<SavedCookie> = cookies
-            .iter()
-            .filter(|c| c.domain.contains("deepseek"))
-            .map(|c| SavedCookie {
-                name: c.name.clone(),
-                value: c.value.clone(),
-                domain: c.domain.clone(),
-                path: c.path.clone(),
-                secure: c.secure,
-                http_only: c.http_only,
-            })
-            .collect();
-        if saved.is_empty() {
-            return Ok(0);
-        }
-
-        let path = session_file();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        std::fs::write(&path, serde_json::to_vec_pretty(&saved)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-        }
-        Ok(saved.len())
-    }
-
-    /// Put the saved cookies back before the page loads.
-    async fn load_cookies(&self) -> Result<usize> {
+    /// Re-issue the session cookies with a real expiry. DeepSeek hands them
+    /// back as browser-session cookies, which the next start would drop, so
+    /// this keeps the profile itself logged in.
+    async fn persist_cookies(&self) -> Result<usize> {
         use chromiumoxide::cdp::browser_protocol::network::{CookieParam, TimeSinceEpoch};
-        let path = session_file();
-        let Ok(raw) = std::fs::read(&path) else {
-            return Ok(0);
-        };
-        let saved: Vec<SavedCookie> = serde_json::from_slice(&raw).unwrap_or_default();
+
+        let cookies = self.page.get_cookies().await?;
         let expires = TimeSinceEpoch::new(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -699,14 +643,16 @@ __VIS__
                 + 180.0 * 86_400.0,
         );
 
-        let mut restored = 0;
-        for cookie in saved {
-            // Setting by URL works from about:blank, where domain-based
-            // Secure cookies are refused.
+        let mut changed = 0;
+        for cookie in cookies.iter().filter(|c| c.domain.contains("deepseek")) {
+            if !cookie.session {
+                continue;
+            }
             let param = CookieParam::builder()
-                .name(cookie.name)
-                .value(cookie.value)
-                .url(self.cfg.url.clone())
+                .name(cookie.name.clone())
+                .value(cookie.value.clone())
+                .domain(cookie.domain.clone())
+                .path(cookie.path.clone())
                 .secure(cookie.secure)
                 .http_only(cookie.http_only)
                 .expires(expires.clone())
@@ -714,10 +660,10 @@ __VIS__
             if let Ok(param) = param
                 && self.page.set_cookie(param).await.is_ok()
             {
-                restored += 1;
+                changed += 1;
             }
         }
-        Ok(restored)
+        Ok(changed)
     }
 
     /// Close the browser politely so it writes its cookie database to disk.
@@ -918,7 +864,7 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
     match session.wait_ready(&tx).await {
         Ok(()) => {
             let _ = session.set_modes(cfg.thinking, cfg.search).await;
-            session.save_cookies().await.ok();
+            session.persist_cookies().await.ok();
             let _ = tx.send(Ev::Status(Status::Ready));
         }
         Err(e) => {
@@ -926,7 +872,18 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
         }
     }
 
-    while let Some(cmd) = cmd_rx.recv().await {
+    let mut tick = tokio::time::interval(Duration::from_secs(10));
+    loop {
+        let cmd = tokio::select! {
+            maybe = cmd_rx.recv() => match maybe {
+                Some(cmd) => cmd,
+                None => break,
+            },
+            _ = tick.tick() => {
+                session.persist_cookies().await.ok();
+                continue;
+            },
+        };
         match cmd {
             Cmd::Send(text) => {
                 let _ = tx.send(Ev::Status(Status::Sending));
@@ -937,7 +894,7 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
                             crate::sessions::record(id, text.lines().next().unwrap_or(""));
                         }
                         // Cookies may rotate while chatting; keep our copy fresh.
-                        session.save_cookies().await.ok();
+                        session.persist_cookies().await.ok();
                         let _ = tx.send(Ev::Status(Status::Ready));
                     }
                     Err(e) => {
@@ -1007,7 +964,7 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
                 }
             }
             Cmd::Shutdown => {
-                session.save_cookies().await.ok();
+                session.persist_cookies().await.ok();
                 session.close().await;
                 break;
             }
@@ -1091,7 +1048,6 @@ pub async fn login(cfg: Config) -> Result<()> {
     }
 
     // The profile is authoritative now; an older copy would only interfere.
-    let _ = std::fs::remove_file(session_file());
 
     println!("checking the session…");
     let mut verify = cfg.clone();
@@ -1110,7 +1066,7 @@ pub async fn login(cfg: Config) -> Result<()> {
     }
 
     if signed_in {
-        session.save_cookies().await.ok();
+        session.persist_cookies().await.ok();
         println!("\n✓ signed in and verified. Now just run `deepseek-chat`.");
         Ok(())
     } else {
@@ -1207,6 +1163,7 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
                 .await
                 .unwrap_or(serde_json::Value::Null);
             report["cookies"] = session.cookies().await.unwrap_or(serde_json::Value::Null);
+            session.persist_cookies().await.ok();
             report["ui"] = session.ui_probe().await.unwrap_or(serde_json::Value::Null);
             report["answerHtml"] = session
                 .answer_html()

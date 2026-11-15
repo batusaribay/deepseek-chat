@@ -14,9 +14,12 @@ use config::Config;
 
 /// Chat with DeepSeek in your terminal.
 ///
-/// Drives chat.deepseek.com in a real browser that keeps its own login, so
-/// there is no API key and no third-party server in the middle. Answers stream
-/// as text and pipe like any other command.
+/// Drives chat.deepseek.com in a browser that keeps its own login, so there is
+/// no API key and no third-party server in the middle. Answers stream as plain
+/// text and pipe like any other command.
+///
+/// Automating a website is against its terms of service. Accounts can be, and
+/// have been, banned for this. Use it with that in mind.
 #[derive(Parser, Debug)]
 #[command(
     name = "deepseek-chat",
@@ -49,10 +52,6 @@ struct Args {
     /// Also print the model's reasoning when it thinks
     #[arg(long)]
     think: bool,
-
-    /// Plain text output, without ANSI styling
-    #[arg(long = "no-color")]
-    no_color: bool,
 
     /// Print what the page looks like, then exit
     #[arg(long)]
@@ -92,11 +91,9 @@ fn main() -> Result<()> {
         cfg.chrome = Some(chrome.clone());
     }
 
-    let color = cli::use_color(args.no_color);
-
     if let Some(path) = args.render {
         let text = std::fs::read_to_string(&path)?;
-        let mut stream = render::Stream::new(io::stdout(), color);
+        let mut stream = render::Stream::new(io::stdout());
         stream.feed(&text)?;
         stream.finish()?;
         println!();
@@ -130,13 +127,33 @@ fn main() -> Result<()> {
         return result;
     }
 
-    let result = runtime.block_on(async move {
-        let app = cli::Cli::start(cfg, color, args.think);
-        match prompt {
-            Some(prompt) => app.once(prompt).await,
-            None => app.run().await,
+    let think = args.think;
+    let mut tried_login = false;
+
+    let result = loop {
+        let run_cfg = cfg.clone();
+        let prompt = prompt.clone();
+        let outcome = runtime.block_on(async move {
+            let app = cli::Cli::start(run_cfg, think);
+            match prompt {
+                Some(prompt) => app.once(prompt).await,
+                None => app.run().await,
+            }
+        });
+
+        match outcome {
+            // Headless and signed out: open a window, sign in, then carry on.
+            Err(e) if e.to_string() == "login required" && !tried_login => {
+                tried_login = true;
+                println!("Not signed in. Opening a browser window to sign in.");
+                match runtime.block_on(session::login(cfg.clone())) {
+                    Ok(()) => continue,
+                    Err(e) => break Err(e),
+                }
+            }
+            other => break other,
         }
-    });
+    };
 
     // Shut the worker down first so the browser process is reaped with us.
     runtime.shutdown_timeout(std::time::Duration::from_millis(500));
