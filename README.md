@@ -1,7 +1,5 @@
 # deepseek-chat
 
-DeepSeek in your terminal.
-
 ![deepseek-chat in a terminal](preview.png)
 
 > Read this first. This automates a website that does not permit
@@ -140,7 +138,7 @@ a failure is auth, a selector, or the network.
 `--probe` is also the polite way to find out whether you are still signed in
 without sending a message.
 
-## Installation
+## Install
 
 Requirements: Rust 1.88+ and Chromium or Google Chrome on `PATH`.
 
@@ -164,37 +162,6 @@ rm -rf ~/.config/deepseek-chat ~/.local/share/deepseek-chat
   profile Chromium maintains, and the config directory is `0700`.
 - No telemetry, analytics, or background polling.
 - `--probe` prints cookie names and lengths, never their values.
-
-## Tested on
-
-Omarchy 4.5.0-3 (Arch Linux), Chromium 155, Wayland. Nothing else has been
-tried; other Linux desktops should work, and macOS or Windows have not been
-tested at all.
-
-## Known Issues
-
-- Account bans. This is the big one. DeepSeek does not allow automation and
-  has suspended accounts for it. Running this is a risk you accept.
-- Your web session can be affected. The same account signed in here and in
-  your browser is two sessions on one account; in the author's case the browser
-  session was signed out.
-- It is browser automation. DeepSeek can change the page at any time, and a
-  CAPTCHA can still decide it does not like the browser.
-- Answer extraction depends on the page's HTML. If a release renames the answer
-  block, `--probe` shows the candidates and `answer_selector` fixes it without
-  a rebuild.
-- `/conversations` lists conversations used through this tool, not every
-  conversation in your web account. The web sidebar is not reachable from the
-  headless page.
-- Only the parts of the page this tool understands are exposed: no file
-  uploads, model picker, or sidebar.
-- One conversation at a time.
-
-## Future Ideas
-
-- Import the web account's conversation list into `/conversations`
-- File and image attachment support
-- Optional JSON output for scripts
 
 ## License
 

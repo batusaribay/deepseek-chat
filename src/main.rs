@@ -26,6 +26,7 @@ use config::Config;
     version,
     about,
     long_about = None,
+    styles = clap::builder::Styles::plain(),
     color = clap::ColorChoice::Never
 )]
 struct Args {

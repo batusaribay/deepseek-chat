@@ -111,7 +111,7 @@ impl Cli {
                     }
                     Ev::Fail(msg) => {
                         tty_clear();
-                        eprintln!("! {msg}");
+                        eprintln!("error: {msg}");
                     }
                     _ => {}
                 },
@@ -197,7 +197,7 @@ impl Cli {
                 Some(Ev::Status(_)) => {}
                 Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
                     tty_clear();
-                    eprintln!("! {msg}");
+                    eprintln!("error: {msg}");
                 }
                 Some(Ev::Toast(msg)) => {
                     tty_clear();
