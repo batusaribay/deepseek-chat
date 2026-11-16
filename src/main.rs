@@ -12,7 +12,7 @@ use clap::Parser;
 
 use config::Config;
 
-/// A terminal front end for DeepSeek's web chat.
+/// A Rust CLI front end for DeepSeek's web chat.
 ///
 /// Drives chat.deepseek.com in a browser that keeps its own login, so there is
 /// no API key and no third-party server in the middle. Answers stream as plain
