@@ -1,42 +1,13 @@
 # deepseek-chat
 
+A terminal front end for DeepSeek's web chat.
+
 ![deepseek-chat in a terminal](preview.png)
 
 > Read this first. This automates a website that does not permit
 > automation. DeepSeek's terms forbid it, and accounts can be banned — mine
 > was suspended for three days while building this. If losing the account
 > matters to you, use the official API instead.
-
-## What it is
-
-A terminal front end for DeepSeek's web chat. The assistant you already use in
-the browser, streamed as text into your shell.
-
-There is no API key, no billing, and no third-party service in the middle. It
-opens the real <https://chat.deepseek.com> in a browser you own, keeps its own
-login, types your message into the real composer and prints the answer back.
-Markdown survives the trip as plain text: headings, lists, emphasis and code
-blocks, with the markers stripped.
-
-It is built for *talking* to DeepSeek — asking questions, thinking out loud,
-working through something — not for wiring a model into an editor, an agent
-loop or a script.
-
-## Why this exists
-
-Two reasons.
-
-Everything is better in a terminal. No window to hunt for, no tab lost behind
-twenty others, no context switch: the conversation sits in the same scrollback
-as your commands, and its output pipes, greps and scrolls back like any other
-program.
-
-And I wanted to see how far browser automation can go before the other end
-notices. DeepSeek has no keyless API, so the website is the only way in, which
-makes it a fair test of that question rather than a way around it.
-
-It is a learning project, not a service. If you need something reliable and
-sanctioned, the API is the right tool.
 
 ## How it works
 
