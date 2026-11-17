@@ -1,6 +1,6 @@
 # deepseek-chat
 
-A Rust CLI front end for DeepSeek's web chat.
+A Rust CLI front end for DeepSeek's web chat
 
 ![deepseek-chat in a terminal](preview.png)
 
