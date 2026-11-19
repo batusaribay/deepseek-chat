@@ -111,7 +111,7 @@ without sending a message.
 
 ## Install
 
-**Requirements:** Rust 1.88+ and Chromium or Google Chrome on `PATH`.
+**Requirements:** Rust 1.89+ and Chromium or Google Chrome on `PATH`.
 
 ```bash
 cargo install --git https://github.com/batusaribay/deepseek-chat.git --locked

@@ -214,7 +214,7 @@ impl Cli {
         if self.think && !think.trim().is_empty() {
             println!();
             println!("[reasoning]");
-            println!("{}", think.trim());
+            println!("{}", clean(&think).trim());
         }
         println!();
         Ok(true)
@@ -260,7 +260,7 @@ impl Cli {
                     match entries.get(n.wrapping_sub(1)) {
                         Some(entry) => {
                             let _ = self.tx.send(Cmd::Open(entry.id.clone()));
-                            println!("opening {}", entry.title);
+                            println!("opening {}", sessions::safe_title(&entry.title));
                         }
                         None => println!("no conversation {n}"),
                     }
@@ -306,7 +306,7 @@ End a line with \\ to continue on the next one."
             return;
         }
         for (i, entry) in entries.iter().take(20).enumerate() {
-            println!("{:3}  {}", i + 1, entry.title);
+            println!("{:3}  {}", i + 1, sessions::safe_title(&entry.title));
         }
         println!("\n/conversations N to reopen one");
     }
@@ -353,6 +353,7 @@ End a line with \\ to continue on the next one."
 
         if let Some(path) = history {
             let _ = rl.save_history(&path);
+            restrict(&path, 0o600);
         }
         self.shutdown().await;
         Ok(())
@@ -385,7 +386,28 @@ End a line with \\ to continue on the next one."
 fn history_path() -> Option<PathBuf> {
     let dir = data_root();
     std::fs::create_dir_all(&dir).ok()?;
+    restrict(&dir, 0o700);
     Some(dir.join("history.txt"))
+}
+
+/// Prompts and conversation titles are private; keep the files that hold them
+/// readable only by their owner.
+fn restrict(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+}
+
+/// Reasoning text also comes from the page, so it gets the same terminal
+/// treatment as the answer.
+fn clean(text: &str) -> String {
+    text.chars()
+        .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
+        .collect()
 }
 
 fn flag(arg: &str, current: bool) -> bool {

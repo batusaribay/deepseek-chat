@@ -2,7 +2,7 @@
 name = "deepseek-chat"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A Rust CLI front end for DeepSeek's web chat"
 license = "MIT"
 repository = "https://github.com/batusaribay/deepseek-chat"
@@ -18,7 +18,7 @@ chromiumoxide = "0.9"
 clap = { version = "4", features = ["derive"] }
 dirs = "7"
 futures = "0.3"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 rustyline = "19"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

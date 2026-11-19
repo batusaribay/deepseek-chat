@@ -91,10 +91,10 @@ impl<W: Write> Stream<W> {
             let head = std::mem::take(&mut self.head);
             match classify(&head) {
                 Some(Block::Fence) => {}
-                Some(Block::Heading) => self
-                    .out
-                    .write_all(head.trim_start_matches('#').trim_start().as_bytes())?,
-                _ => self.out.write_all(head.as_bytes())?,
+                Some(Block::Heading) => {
+                    write_visible(&mut self.out, head.trim_start_matches('#').trim_start())?
+                }
+                _ => write_visible(&mut self.out, &head)?,
             }
         }
         if self.stars > 0 {
@@ -137,7 +137,7 @@ impl<W: Write> Stream<W> {
                     return Ok(());
                 }
                 let head = std::mem::take(&mut self.head);
-                self.out.write_all(head.as_bytes())?;
+                write_visible(&mut self.out, &head)?;
                 self.line_start = false;
                 return Ok(());
             }
@@ -147,7 +147,10 @@ impl<W: Write> Stream<W> {
                 return Ok(());
             }
             let mut buf = [0u8; 4];
-            return self.out.write_all(ch.encode_utf8(&mut buf).as_bytes());
+            return match visible(ch) {
+                Some(ch) => self.out.write_all(ch.encode_utf8(&mut buf).as_bytes()),
+                None => Ok(()),
+            };
         }
 
         if self.line_start {
@@ -170,9 +173,9 @@ impl<W: Write> Stream<W> {
                 self.opening = Some(head.trim_start_matches('`').to_string());
                 Ok(())
             }
-            Block::Heading => self
-                .out
-                .write_all(head.trim_start_matches('#').trim_start().as_bytes()),
+            Block::Heading => {
+                write_visible(&mut self.out, head.trim_start_matches('#').trim_start())
+            }
             Block::Bullet => self.out.write_all(b"- "),
             Block::Quote => self.out.write_all(b"> "),
             Block::Rule => {
@@ -191,6 +194,11 @@ impl<W: Write> Stream<W> {
     }
 
     fn inline(&mut self, ch: char) -> io::Result<()> {
+        // The answer comes from a web page, so it must not be able to drive
+        // the terminal with control sequences.
+        if visible(ch).is_none() {
+            return Ok(());
+        }
         match ch {
             '\n' => {
                 self.stars = 0;
@@ -210,6 +218,22 @@ impl<W: Write> Stream<W> {
         let mut buf = [0u8; 4];
         self.out.write_all(ch.encode_utf8(&mut buf).as_bytes())
     }
+}
+
+/// Control characters would let a page rewrite the terminal (or the clipboard
+/// through OSC sequences), so only newlines, tabs and printable text survive.
+fn visible(ch: char) -> Option<char> {
+    (!ch.is_control() || ch == '\n' || ch == '\t').then_some(ch)
+}
+
+fn write_visible<W: Write>(out: &mut W, text: &str) -> io::Result<()> {
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        if let Some(ch) = visible(ch) {
+            out.write_all(ch.encode_utf8(&mut buf).as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 /// Is the held-back line prefix recognisable yet?
@@ -279,6 +303,17 @@ mod tests {
             out,
             "Head\n\nSome bold, italic, code, and a [link](https://x).\n"
         );
+    }
+
+    #[test]
+    fn strips_control_sequences_from_answers() {
+        let out = render("safe \x1b[31mred\x1b[0m text\n");
+        assert!(!out.contains('\x1b'), "got {out:?}");
+        assert_eq!(out, "safe [31mred[0m text\n");
+
+        let out = render("```\n\x1b]52;c;cGF5bG9hZA==\x07\n```\n");
+        assert!(!out.contains('\x1b'), "got {out:?}");
+        assert!(!out.contains('\x07'), "got {out:?}");
     }
 
     #[test]

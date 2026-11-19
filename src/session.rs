@@ -326,6 +326,8 @@ impl Session {
         let profile = profile_dir();
         std::fs::create_dir_all(&profile)
             .with_context(|| format!("creating profile dir {}", profile.display()))?;
+        // The profile holds the logged-in session cookies.
+        restrict_permissions(&profile, 0o700);
         clear_stale_lock(&profile);
 
         // The library's default args include --enable-automation, which sets
@@ -555,7 +557,7 @@ __VIS__
         let all = self.page.get_cookies().await?;
         let rows: Vec<serde_json::Value> = all
             .iter()
-            .filter(|c| c.domain.contains("deepseek"))
+            .filter(|c| is_deepseek_domain(&c.domain))
             .map(|c| {
                 serde_json::json!({
                     "name": c.name,
@@ -644,7 +646,7 @@ __VIS__
         );
 
         let mut changed = 0;
-        for cookie in cookies.iter().filter(|c| c.domain.contains("deepseek")) {
+        for cookie in cookies.iter().filter(|c| is_deepseek_domain(&c.domain)) {
             if !cookie.session {
                 continue;
             }
@@ -850,15 +852,30 @@ pub fn spawn(cfg: Config) -> (CmdTx, Rx) {
 async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
     let _ = tx.send(Ev::Status(Status::Connecting));
 
-    let session = loop {
+    // A missing browser or an unusable profile will not fix itself, so retry a
+    // couple of times and then report the real error instead of leaving the
+    // caller waiting for minutes.
+    let mut opened = None;
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
         match Session::open(cfg.clone()).await {
-            Ok(s) => break s,
-            Err(e) => {
-                let _ = tx.send(Ev::Fail(format!("{e:#}")));
-                let _ = tx.send(Ev::Toast("retrying in 3s…".into()));
-                tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok(session) => {
+                opened = Some(session);
+                break;
+            }
+            Err(error) => {
+                last_error = format!("{error:#}");
+                let _ = tx.send(Ev::Fail(last_error.clone()));
+                if attempt < 3 {
+                    let _ = tx.send(Ev::Toast("retrying in 3s…".into()));
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
             }
         }
+    }
+    let Some(session) = opened else {
+        let _ = tx.send(Ev::Fatal(last_error));
+        return;
     };
 
     match session.wait_ready(&tx).await {
@@ -986,6 +1003,7 @@ pub async fn login(cfg: Config) -> Result<()> {
 
     let profile = profile_dir();
     std::fs::create_dir_all(&profile).with_context(|| format!("creating {}", profile.display()))?;
+    restrict_permissions(&profile, 0o700);
 
     if let Some(pid) = live_profile_pid(&profile) {
         bail!("the browser is already open with this profile (pid {pid}) — close it first");
@@ -1012,7 +1030,12 @@ pub async fn login(cfg: Config) -> Result<()> {
         .spawn()
         .with_context(|| format!("could not start {browser}"))?;
 
-    let db = profile.join("Default").join("Cookies");
+    // Chromium has kept the cookie database at Default/Cookies for years, but
+    // newer builds move it under Default/Network.
+    let db = ["Default/Cookies", "Default/Network/Cookies"]
+        .into_iter()
+        .map(|relative| profile.join(relative))
+        .find(|candidate| candidate.exists());
 
     let exited = if std::io::stdin().is_terminal() {
         let enter = tokio::task::spawn_blocking(|| {
@@ -1036,9 +1059,9 @@ pub async fn login(cfg: Config) -> Result<()> {
         shutdown(&mut child).await;
     }
 
-    if !db.exists() {
+    let Some(db) = db else {
         bail!("no browser profile was written — did the browser start?");
-    }
+    };
 
     // Mark the session cookies persistent so the next start keeps them.
     {
@@ -1107,9 +1130,28 @@ fn persist_deepseek_cookies(conn: &rusqlite::Connection) -> Result<usize> {
 
     Ok(conn.execute(
         "update cookies set expires_utc = ?1, has_expires = 1, is_persistent = 1
-         where host_key like '%deepseek%' and (expires_utc = 0 or has_expires = 0)",
+         where (host_key = 'deepseek.com' or host_key like '%.deepseek.com')
+           and (expires_utc = 0 or has_expires = 0)",
         [future * 1_000_000],
     )?)
+}
+
+/// Cookies belong to DeepSeek only when the domain is deepseek.com or one of
+/// its subdomains; a look-alike name such as `notdeepseek.example` must not
+/// match.
+fn is_deepseek_domain(domain: &str) -> bool {
+    let domain = domain.trim_start_matches('.').to_ascii_lowercase();
+    domain == "deepseek.com" || domain.ends_with(".deepseek.com")
+}
+
+fn restrict_permissions(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }
 
 /// Chromium refuses to start when a previous run left its singleton files
@@ -1198,7 +1240,13 @@ pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
                 if let Ok(html) = session.answer_html().await
                     && !html.is_empty()
                 {
-                    let short: String = html.chars().take(2500).collect();
+                    let short: String = html
+                        .chars()
+                        .filter(|character| {
+                            *character == '\n' || *character == '\t' || !character.is_control()
+                        })
+                        .take(2500)
+                        .collect();
                     println!("\n--- answer html ---\n{short}");
                 }
             }
@@ -1220,6 +1268,10 @@ fn tail(text: &str, n: usize) -> String {
     let start = chars.len().saturating_sub(n);
     let mut out: String = chars[start..].iter().collect();
     out = out.replace('\n', " \\n ");
+    out = out
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
     if start > 0 {
         out.insert(0, '…');
     }
@@ -1243,7 +1295,17 @@ fn snapshot_json(s: &Snapshot) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::persist_deepseek_cookies;
+    use super::{is_deepseek_domain, persist_deepseek_cookies};
+
+    #[test]
+    fn only_deepseek_domains_match() {
+        assert!(is_deepseek_domain("deepseek.com"));
+        assert!(is_deepseek_domain(".deepseek.com"));
+        assert!(is_deepseek_domain("chat.deepseek.com"));
+        assert!(!is_deepseek_domain("notdeepseek.com"));
+        assert!(!is_deepseek_domain("deepseek.com.evil.example"));
+        assert!(!is_deepseek_domain("example.com"));
+    }
 
     #[test]
     fn session_cookies_become_persistent() {

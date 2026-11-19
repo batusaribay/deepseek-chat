@@ -88,7 +88,13 @@ impl Config {
             }
         }
         std::fs::write(&path, format!("{HEADER}{}", toml::to_string_pretty(self)?))
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 }
 
