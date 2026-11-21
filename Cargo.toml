@@ -3,7 +3,7 @@ name = "deepseek-chat"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "A Rust CLI front end for DeepSeek's web chat"
+description = "A Rust CLI to chat with DeepSeek"
 license = "MIT"
 repository = "https://github.com/batusaribay/deepseek-chat"
 publish = false
@@ -32,3 +32,11 @@ tokio = { version = "1", features = [
     "time",
 ] }
 toml = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"

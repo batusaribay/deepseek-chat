@@ -18,6 +18,37 @@ use crate::sessions;
 
 const PROMPT: &str = "› ";
 
+/// Where the answer goes: straight to the terminal, or into a buffer for JSON.
+enum Sink {
+    Terminal(io::Stdout),
+    Buffer(Vec<u8>),
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Sink::Terminal(out) => out.write(buf),
+            Sink::Buffer(out) => out.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Sink::Terminal(out) => out.flush(),
+            Sink::Buffer(out) => out.flush(),
+        }
+    }
+}
+
+impl Sink {
+    fn into_buffer(self) -> Option<Vec<u8>> {
+        match self {
+            Sink::Buffer(buffer) => Some(buffer),
+            Sink::Terminal(_) => None,
+        }
+    }
+}
+
 pub struct Cli {
     cfg: Config,
     tx: CmdTx,
@@ -25,6 +56,7 @@ pub struct Cli {
     think: bool,
     thinking: bool,
     search: bool,
+    json: bool,
 }
 
 fn tty_write(msg: &str) {
@@ -44,7 +76,7 @@ fn tty_clear() {
 }
 
 impl Cli {
-    pub fn start(cfg: Config, think: bool) -> Self {
+    pub fn start(cfg: Config, think: bool, json: bool) -> Self {
         let thinking = cfg.thinking;
         let search = cfg.search;
         let (tx, ev) = session::spawn(cfg.clone());
@@ -55,6 +87,7 @@ impl Cli {
             think,
             thinking,
             search,
+            json,
         }
     }
 
@@ -153,7 +186,11 @@ impl Cli {
             bail!("the browser session ended");
         }
 
-        let mut stream = Stream::new(io::stdout());
+        let mut stream = Stream::new(if self.json {
+            Sink::Buffer(Vec::new())
+        } else {
+            Sink::Terminal(io::stdout())
+        });
         let mut think = String::new();
         let mut got_answer = false;
         tty_write("thinking…");
@@ -208,8 +245,22 @@ impl Cli {
 
         tty_clear();
         stream.finish()?;
+        if self.json {
+            let answer = stream
+                .into_writer()
+                .into_buffer()
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            let reasoning = clean(&think).trim().to_string();
+            let value = serde_json::json!({
+                "answer": answer,
+                "thinking": (!reasoning.is_empty()).then_some(reasoning),
+            });
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            return Ok(true);
+        }
         if !got_answer {
-            println!("(no answer captured — try `deepseek-chat --probe`)");
+            println!("(no answer captured: try `deepseek-chat --probe`)");
         }
         if self.think && !think.trim().is_empty() {
             println!();

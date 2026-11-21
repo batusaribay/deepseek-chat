@@ -12,7 +12,7 @@ use clap::Parser;
 
 use config::Config;
 
-/// A Rust CLI front end for DeepSeek's web chat.
+/// A Rust CLI to chat with DeepSeek.
 ///
 /// Drives chat.deepseek.com in a browser that keeps its own login, so there is
 /// no API key and no third-party server in the middle. Answers stream as plain
@@ -61,6 +61,10 @@ struct Args {
     /// With --probe: also send this text and stream the answer
     #[arg(long, value_name = "TEXT", requires = "probe")]
     say: Option<String>,
+
+    /// Print one prompt's answer as JSON
+    #[arg(long)]
+    json: bool,
 
     /// Render a Markdown file the way answers are rendered
     #[arg(long, value_name = "FILE", hide = true)]
@@ -129,13 +133,17 @@ fn main() -> Result<()> {
     }
 
     let think = args.think;
+    let json = args.json;
+    if json && prompt.is_none() {
+        anyhow::bail!("--json needs a single prompt");
+    }
     let mut tried_login = false;
 
     let result = loop {
         let run_cfg = cfg.clone();
         let prompt = prompt.clone();
         let outcome = runtime.block_on(async move {
-            let app = cli::Cli::start(run_cfg, think);
+            let app = cli::Cli::start(run_cfg, think, json);
             match prompt {
                 Some(prompt) => app.once(prompt).await,
                 None => app.run().await,

@@ -598,12 +598,12 @@ __VIS__
                     .contains("ERROR: The request could not be satisfied")
                 {
                     return Err(anyhow!(
-                        "DeepSeek's edge blocked the request — run `deepseek-chat --headed` once and retry"
+                        "DeepSeek's edge blocked the request: run `deepseek-chat --headed` once and retry"
                     ));
                 }
                 if snap.composer {
                     if announced_login {
-                        let _ = tx.send(Ev::Toast("signed in — you're good to go".into()));
+                        let _ = tx.send(Ev::Toast("signed in, you're good to go".into()));
                     }
                     return Ok(());
                 }
@@ -612,7 +612,7 @@ __VIS__
                         announced_login = true;
                         let _ = tx.send(Ev::Status(Status::WaitingLogin));
                         let hint = if self.cfg.headless {
-                            "not signed in — run `deepseek-chat --headed` once to log in"
+                            "not signed in: run `deepseek-chat --headed` once to log in"
                         } else {
                             "log in inside the Chromium window, then this continues automatically"
                         };
@@ -704,9 +704,7 @@ __VIS__
     async fn send(&self, text: &str, tx: &Tx) -> Result<()> {
         let before = self.snapshot().await?;
         if !before.composer {
-            return Err(anyhow!(
-                "message box not found — is the page still loading?"
-            ));
+            return Err(anyhow!("message box not found: is the page still loading?"));
         }
 
         human_pause(120, 280).await;
@@ -1006,7 +1004,7 @@ pub async fn login(cfg: Config) -> Result<()> {
     restrict_permissions(&profile, 0o700);
 
     if let Some(pid) = live_profile_pid(&profile) {
-        bail!("the browser is already open with this profile (pid {pid}) — close it first");
+        bail!("the browser is already open with this profile (pid {pid}): close it first");
     }
     clear_stale_lock(&profile);
 
@@ -1016,7 +1014,7 @@ pub async fn login(cfg: Config) -> Result<()> {
         .or_else(default_browser)
         .unwrap_or_else(|| "chromium".to_string());
 
-    println!("Opening a normal {browser} window — no debugging port, no automation.");
+    println!("Opening a normal {browser} window, no debugging port, no automation.");
     println!("Sign in the way you usually do, then close the window.");
     println!("If the window stays open in the background, press enter here instead.\n");
 
@@ -1060,7 +1058,7 @@ pub async fn login(cfg: Config) -> Result<()> {
     }
 
     let Some(db) = db else {
-        bail!("no browser profile was written — did the browser start?");
+        bail!("no browser profile was written: did the browser start?");
     };
 
     // Mark the session cookies persistent so the next start keeps them.
@@ -1090,7 +1088,7 @@ pub async fn login(cfg: Config) -> Result<()> {
 
     if signed_in {
         session.persist_cookies().await.ok();
-        println!("\n✓ signed in and verified. Now just run `deepseek-chat`.");
+        println!("\nsigned in and verified. Now just run `deepseek-chat`.");
         Ok(())
     } else {
         bail!(

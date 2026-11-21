@@ -58,6 +58,11 @@ impl<W: Write> Stream<W> {
         self.emitted
     }
 
+    /// Take the writer back once the answer is complete.
+    pub fn into_writer(self) -> W {
+        self.out
+    }
+
     /// Feed the whole answer so far; only complete lines are written.
     pub fn feed(&mut self, full: &str) -> io::Result<()> {
         let end = full.rfind('\n').map(|i| i + 1).unwrap_or(0);
