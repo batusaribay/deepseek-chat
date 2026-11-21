@@ -4,7 +4,7 @@ A Rust CLI to chat with DeepSeek
 
 ![deepseek-chat in a terminal](preview.png)
 
-## Why it exists
+## Why this exists
 
 DeepSeek has no keyless terminal client. This one drives the real web chat in a
 browser profile of its own, so there is no API key and no third-party server in
@@ -14,26 +14,25 @@ official API if losing the account matters.
 
 ## How it works
 
-1. `--login` opens a normal browser window on a private profile. Nothing is
-   attached to that window, so sign-in, device checks, and CAPTCHAs behave as
-   they do in any browser.
-2. The session is persisted in that profile and verified by loading the chat
-   page once. Later runs reuse it headless. If the session expires, the next
-   run opens a window and asks for a sign-in.
-3. A message is typed into the real composer and sent with a real keypress,
-   with short pauses, instead of calling the network directly.
-4. Thinking mode and web search are switched through the two chips under the
-   composer and can be changed with `/think` and `/search`.
-5. The answer is re-read from the page as it renders, converted from HTML back
-   to plain text, and streamed complete line by line.
-6. Output has no colour or cursor tricks. Markdown markers are stripped, code
-   prints as itself, and nothing is drawn in an alternate screen.
-7. Conversation titles are kept in a small local index so they can be listed
-   and reopened.
+`--login` opens a normal browser window on a private profile. Nothing is
+attached to that window, so sign-in, device checks, and CAPTCHAs behave as they
+do in any browser. The session is persisted in that profile and verified by
+loading the chat page once. Later runs reuse it headless, and an expired session
+opens a window and asks for a sign-in.
+
+A message is typed into the real composer and sent with a real keypress, with
+short pauses, instead of calling the network directly. Thinking mode and web
+search are switched through the two chips under the composer and can be changed
+with `/think` and `/search`. The answer is re-read from the page as it renders,
+converted from HTML back to plain text, and streamed complete line by line.
+
+Output has no colour or cursor tricks. Markdown markers are stripped, code
+prints as itself, and nothing is drawn in an alternate screen. Conversation
+titles are kept in a small local index so they can be listed and reopened.
 
 ## Usage
 
-```bash
+```text
 deepseek-chat [OPTIONS] [QUESTION]
 
 Commands:
@@ -62,20 +61,31 @@ Options:
   -V, --version        Print version
 ```
 
+Typical calls:
+
+```bash
+deepseek-chat
+deepseek-chat -p "why is the sky blue"
+echo "summarise this in 3 bullets" | deepseek-chat
+deepseek-chat --think -p "is 0.1 + 0.2 == 0.3 in floating point?"
+deepseek-chat --json -p "explain TCP and UDP" | jq -r .answer
+```
+
 ## Notes
 
-- Sign in once with `deepseek-chat --login`. Then close the window, or press
-  `enter` in the terminal if it stays open. `deepseek-chat -p "question"` and
-  piped stdin both work without a terminal.
-- Keys: `enter` sends, a trailing `\` continues the line, `up` and `down` walk
-  the prompt history, `ctrl+r` searches it, and `ctrl+c` quits.
-- `--probe` prints login state, the composer, the mode chips, cookie names and
-  lengths, and a fingerprint summary. It never prints cookie values. Use it to
-  tell an auth failure from a selector failure.
-- The browser profile is private to this tool, under
-  `~/.local/share/deepseek-chat`. Your own browser profile is never opened or
-  modified. No credentials are stored outside that profile, the config
-  directory is mode `0700`, and there is no telemetry or polling.
+Sign in once with `deepseek-chat --login`. Then close the window, or press
+`enter` in the terminal if it stays open. Piped stdin also works without a
+terminal. Keys: `enter` sends, a trailing `\` continues the line, `up` and
+`down` walk the prompt history, `ctrl+r` searches it, and `ctrl+c` quits.
+
+`--probe` prints login state, the composer, the mode chips, cookie names and
+lengths, and a fingerprint summary. It never prints cookie values, so it is a
+safe way to tell an auth failure from a selector failure.
+
+The browser profile is private to this tool, under
+`~/.local/share/deepseek-chat`. Your own browser profile is never opened or
+modified. No credentials are stored outside that profile, the config directory
+is mode `0700`, and there is no telemetry or polling.
 
 ## Install
 
