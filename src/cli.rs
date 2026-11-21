@@ -15,6 +15,7 @@ use crate::config::{Config, data_root};
 use crate::render::Stream;
 use crate::session::{self, Cmd, CmdTx, Ev, Status};
 use crate::sessions;
+use crate::theme::{self, Role};
 
 const PROMPT: &str = "› ";
 
@@ -61,6 +62,7 @@ pub struct Cli {
 
 fn tty_write(msg: &str) {
     if io::stderr().is_terminal() {
+        let msg = theme::current().paint(Role::Muted, msg);
         let mut err = io::stderr();
         let _ = write!(err, "\r{msg}\x1b[K");
         let _ = err.flush();
@@ -144,7 +146,10 @@ impl Cli {
                     }
                     Ev::Fail(msg) => {
                         tty_clear();
-                        eprintln!("error: {msg}");
+                        eprintln!(
+                            "{}",
+                            theme::current().paint(Role::Error, &format!("error: {msg}"))
+                        );
                     }
                     _ => {}
                 },
@@ -234,11 +239,14 @@ impl Cli {
                 Some(Ev::Status(_)) => {}
                 Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
                     tty_clear();
-                    eprintln!("error: {msg}");
+                    eprintln!(
+                        "{}",
+                        theme::current().paint(Role::Error, &format!("error: {msg}"))
+                    );
                 }
                 Some(Ev::Toast(msg)) => {
                     tty_clear();
-                    eprintln!("{msg}");
+                    eprintln!("{}", theme::current().paint(Role::Muted, &msg));
                 }
             }
         }
@@ -260,11 +268,17 @@ impl Cli {
             return Ok(true);
         }
         if !got_answer {
-            println!("(no answer captured: try `deepseek-chat --probe`)");
+            println!(
+                "{}",
+                theme::current().paint(
+                    Role::Muted,
+                    "(no answer captured: try `deepseek-chat --probe`)"
+                )
+            );
         }
         if self.think && !think.trim().is_empty() {
             println!();
-            println!("[reasoning]");
+            println!("{}", theme::current().paint(Role::Muted, "[reasoning]"));
             println!("{}", clean(&think).trim());
         }
         println!();

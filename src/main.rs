@@ -3,6 +3,7 @@ mod config;
 mod render;
 mod session;
 mod sessions;
+mod theme;
 
 use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use config::Config;
+use theme::{ColorMode, Role, current};
 
 /// A Rust CLI to chat with DeepSeek.
 ///
@@ -66,6 +68,10 @@ struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Color output: auto, always, or never
+    #[arg(long, value_enum, default_value = "auto", value_name = "WHEN")]
+    color: ColorMode,
+
     /// Render a Markdown file the way answers are rendered
     #[arg(long, value_name = "FILE", hide = true)]
     render: Option<PathBuf>,
@@ -81,6 +87,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    theme::init(args.color);
     let mut cfg = Config::load().unwrap_or_default();
 
     if args.headless {
@@ -171,7 +178,10 @@ fn main() -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.to_string() == "interrupted" => std::process::exit(130),
         Err(e) => {
-            eprintln!("deepseek-chat: {e:#}");
+            eprintln!(
+                "{}",
+                current().paint(Role::Error, &format!("deepseek-chat: {e:#}"))
+            );
             std::process::exit(1);
         }
     }

@@ -57,6 +57,7 @@ Options:
       --say <TEXT>     With --probe: send this and stream the answer
       --url <URL>      Drive a different chat page
       --chrome <PATH>  Browser binary to use
+      --color <WHEN>   Color output: auto, always, or never [default: auto]
   -h, --help           Print help
   -V, --version        Print version
 ```
@@ -86,6 +87,11 @@ The browser profile is private to this tool, under
 `~/.local/share/deepseek-chat`. Your own browser profile is never opened or
 modified. No credentials are stored outside that profile, the config directory
 is mode `0700`, and there is no telemetry or polling.
+
+Color uses the terminal palette and ANSI attributes only. Answers and reasoning
+text inherit the terminal foreground; status lines and errors use muted and
+error roles. `--color never`, `NO_COLOR`, `CLICOLOR=0`, `TERM=dumb`, and
+non-terminal output all disable it. JSON is never colored.
 
 ## Install
 
