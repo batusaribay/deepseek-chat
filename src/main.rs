@@ -9,7 +9,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use config::Config;
 use theme::{ColorMode, Role, current};
@@ -39,6 +39,10 @@ struct Args {
     /// The question to ask (same as --print)
     #[arg(value_name = "QUESTION")]
     question: Option<String>,
+
+    /// Start the interactive chat
+    #[arg(long)]
+    chat: bool,
 
     /// Sign in with a plain browser window (needed once)
     #[arg(long)]
@@ -86,6 +90,13 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os().len() == 1 && io::stdin().is_terminal() {
+        let mut command = Args::command();
+        command.print_help()?;
+        println!();
+        return Ok(());
+    }
+
     let args = Args::parse();
     theme::init(args.color);
     let mut cfg = Config::load().unwrap_or_default();
@@ -113,6 +124,9 @@ fn main() -> Result<()> {
     }
 
     let mut prompt = args.print.or(args.question);
+    if args.chat && prompt.is_some() {
+        anyhow::bail!("--chat cannot be combined with a prompt");
+    }
 
     // Piped stdin means one shot: `echo "why is the sky blue" | deepseek-chat`
     if prompt.is_none() && !io::stdin().is_terminal() {

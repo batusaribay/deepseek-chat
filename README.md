@@ -48,6 +48,7 @@ Commands:
 
 Options:
   -p, --print <TEXT>   Send one prompt, print the answer, and exit
+      --chat           Start the interactive chat
       --json           Print one prompt's answer as JSON
       --login          Sign in with a plain browser window
       --headless       Run the browser with no window (default)
@@ -63,7 +64,7 @@ Options:
 ```
 
 ```bash
-deepseek-chat
+deepseek-chat --chat
 deepseek-chat -p "why is the sky blue"
 echo "summarise this in 3 bullets" | deepseek-chat
 deepseek-chat --think -p "is 0.1 + 0.2 == 0.3 in floating point?"
@@ -71,6 +72,9 @@ deepseek-chat --json -p "explain TCP and UDP" | jq -r .answer
 ```
 
 ## Notes
+
+Running `deepseek-chat` with no arguments prints help and exits 0; use
+`--chat` to start the interactive chat.
 
 Sign in once with `deepseek-chat --login`. Then close the window, or press
 `enter` in the terminal if it stays open. Piped stdin also works without a
