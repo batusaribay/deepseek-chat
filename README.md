@@ -62,8 +62,6 @@ Options:
   -V, --version        Print version
 ```
 
-Typical calls:
-
 ```bash
 deepseek-chat
 deepseek-chat -p "why is the sky blue"
