@@ -89,30 +89,21 @@ struct Args {
     chrome: Option<String>,
 }
 
+fn print_help() -> Result<()> {
+    let mut command = Args::command();
+    command.print_help()?;
+    println!();
+    Ok(())
+}
+
 fn main() -> Result<()> {
-    if std::env::args_os().len() == 1 && io::stdin().is_terminal() {
-        let mut command = Args::command();
-        command.print_help()?;
-        println!();
-        return Ok(());
+    let no_args = std::env::args_os().len() == 1;
+    if no_args && io::stdin().is_terminal() {
+        return print_help();
     }
 
     let args = Args::parse();
     theme::init(args.color);
-    let mut cfg = Config::load().unwrap_or_default();
-
-    if args.headless {
-        cfg.headless = true;
-    }
-    if args.headed || args.login {
-        cfg.headless = false;
-    }
-    if let Some(url) = &args.url {
-        cfg.url = url.clone();
-    }
-    if let Some(chrome) = &args.chrome {
-        cfg.chrome = Some(chrome.clone());
-    }
 
     if let Some(path) = args.render {
         let text = std::fs::read_to_string(&path)?;
@@ -135,6 +126,23 @@ fn main() -> Result<()> {
         if !buffer.trim().is_empty() {
             prompt = Some(buffer.trim().to_string());
         }
+    }
+    if no_args && prompt.is_none() {
+        return print_help();
+    }
+
+    let mut cfg = Config::load()?;
+    if args.headless {
+        cfg.headless = true;
+    }
+    if args.headed || args.login {
+        cfg.headless = false;
+    }
+    if let Some(url) = &args.url {
+        cfg.url = url.clone();
+    }
+    if let Some(chrome) = &args.chrome {
+        cfg.chrome = Some(chrome.clone());
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

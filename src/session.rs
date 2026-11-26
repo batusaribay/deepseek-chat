@@ -740,14 +740,15 @@ __VIS__
 
         // Wait for a new answer node to appear. If Enter did nothing, try the
         // send button once.
-        let deadline = Instant::now() + Duration::from_secs(240);
+        let send_started = Instant::now();
+        let deadline = send_started + Duration::from_secs(240);
         let mut clicked = false;
         loop {
             let snap = self.snapshot().await?;
             if snap.count > before.count {
                 break;
             }
-            if !clicked && Instant::now().duration_since(deadline) < Duration::from_secs(200) {
+            if should_click_send(clicked, send_started.elapsed()) {
                 let sent: bool = self
                     .page
                     .evaluate(self.js.click_send())
@@ -981,10 +982,24 @@ async fn run(cfg: Config, mut cmd_rx: UnboundedReceiver<Cmd>, tx: Tx) {
             Cmd::Shutdown => {
                 session.persist_cookies().await.ok();
                 session.close().await;
-                break;
+                return;
             }
         }
     }
+    session.close().await;
+}
+
+fn should_click_send(clicked: bool, elapsed: Duration) -> bool {
+    !clicked && elapsed >= Duration::from_secs(40)
+}
+
+fn cookie_db_path(profile: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Chromium has kept the cookie database at Default/Cookies for years, but
+    // newer builds move it under Default/Network.
+    ["Default/Cookies", "Default/Network/Cookies"]
+        .into_iter()
+        .map(|relative| profile.join(relative))
+        .find(|candidate| candidate.is_file())
 }
 
 /// `deepseek-chat --probe`: report what the page looks like, then exit. Handy after a
@@ -1028,13 +1043,6 @@ pub async fn login(cfg: Config) -> Result<()> {
         .spawn()
         .with_context(|| format!("could not start {browser}"))?;
 
-    // Chromium has kept the cookie database at Default/Cookies for years, but
-    // newer builds move it under Default/Network.
-    let db = ["Default/Cookies", "Default/Network/Cookies"]
-        .into_iter()
-        .map(|relative| profile.join(relative))
-        .find(|candidate| candidate.exists());
-
     let exited = if std::io::stdin().is_terminal() {
         let enter = tokio::task::spawn_blocking(|| {
             let mut line = String::new();
@@ -1057,7 +1065,9 @@ pub async fn login(cfg: Config) -> Result<()> {
         shutdown(&mut child).await;
     }
 
-    let Some(db) = db else {
+    // A first login creates this database while Chromium is running, so look
+    // for it only after the browser has exited and flushed the profile.
+    let Some(db) = cookie_db_path(&profile) else {
         bail!("no browser profile was written: did the browser start?");
     };
 
@@ -1088,9 +1098,11 @@ pub async fn login(cfg: Config) -> Result<()> {
 
     if signed_in {
         session.persist_cookies().await.ok();
+        session.close().await;
         println!("\nsigned in and verified. Now just run `deepseek-chat`.");
         Ok(())
     } else {
+        session.close().await;
         bail!(
             "that did not produce a signed-in session.\n\
              Run `deepseek-chat --login` again and sign in until the chat page \n\
@@ -1293,7 +1305,35 @@ fn snapshot_json(s: &Snapshot) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_deepseek_domain, persist_deepseek_cookies};
+    use super::{cookie_db_path, is_deepseek_domain, persist_deepseek_cookies, should_click_send};
+    use std::time::Duration;
+
+    #[test]
+    fn send_button_is_only_a_delayed_fallback() {
+        assert!(!should_click_send(false, Duration::from_secs(1)));
+        assert!(should_click_send(false, Duration::from_secs(40)));
+        assert!(!should_click_send(true, Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn finds_a_cookie_database_created_during_login() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let profile = std::env::temp_dir().join(format!(
+            "deepseek-chat-cookies-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&profile).unwrap();
+        assert_eq!(cookie_db_path(&profile), None);
+
+        let database = profile.join("Default/Network/Cookies");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        std::fs::write(&database, []).unwrap();
+        assert_eq!(cookie_db_path(&profile), Some(database));
+        std::fs::remove_dir_all(profile).unwrap();
+    }
 
     #[test]
     fn only_deepseek_domains_match() {

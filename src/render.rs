@@ -67,7 +67,7 @@ impl<W: Write> Stream<W> {
     pub fn feed(&mut self, full: &str) -> io::Result<()> {
         let end = full.rfind('\n').map(|i| i + 1).unwrap_or(0);
 
-        if end > self.emitted && self.emitted <= full.len() {
+        if end > self.emitted && self.emitted <= full.len() && full.is_char_boundary(self.emitted) {
             let chunk = full[self.emitted..end].to_string();
             self.emitted = end;
             self.emit(&chunk)?;
@@ -355,6 +355,18 @@ mod tests {
             s.finish().unwrap();
         }
         assert_eq!(String::from_utf8(out).unwrap(), "Hello world\n");
+    }
+
+    #[test]
+    fn rewritten_utf8_prefix_does_not_panic() {
+        let mut out = Vec::new();
+        {
+            let mut stream = Stream::new(&mut out);
+            stream.feed("abcd\n").unwrap();
+            stream.feed("ééé\n").unwrap();
+            stream.finish().unwrap();
+        }
+        assert_eq!(String::from_utf8(out).unwrap(), "abcd\n");
     }
 
     #[test]

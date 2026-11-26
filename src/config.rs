@@ -69,7 +69,7 @@ impl Config {
         let path = config_path();
         if !path.exists() {
             let cfg = Config::default();
-            cfg.save().ok();
+            cfg.save()?;
             return Ok(cfg);
         }
         let raw = std::fs::read_to_string(&path)

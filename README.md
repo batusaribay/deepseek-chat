@@ -73,27 +73,14 @@ deepseek-chat --json -p "explain TCP and UDP" | jq -r .answer
 
 ## Notes
 
-Running `deepseek-chat` with no arguments prints help and exits 0; use
-`--chat` to start the interactive chat.
+Sign in once with `deepseek-chat --login`. Piped stdin also works without a
+terminal. In the chat, `enter` sends, a trailing `\` continues the line, and
+`ctrl+c` quits.
 
-Sign in once with `deepseek-chat --login`. Then close the window, or press
-`enter` in the terminal if it stays open. Piped stdin also works without a
-terminal. Keys: `enter` sends, a trailing `\` continues the line, `up` and
-`down` walk the prompt history, `ctrl+r` searches it, and `ctrl+c` quits.
+## Config
 
-`--probe` prints login state, the composer, the mode chips, cookie names and
-lengths, and a fingerprint summary. It never prints cookie values, so it is a
-safe way to tell an auth failure from a selector failure.
-
-The browser profile is private to this tool, under
-`~/.local/share/deepseek-chat`. Your own browser profile is never opened or
-modified. No credentials are stored outside that profile, the config directory
-is mode `0700`, and there is no telemetry or polling.
-
-Color uses the terminal palette and ANSI attributes only. Answers and reasoning
-text inherit the terminal foreground; status lines and errors use muted and
-error roles. `--color never`, `NO_COLOR`, `CLICOLOR=0`, `TERM=dumb`, and
-non-terminal output all disable it. JSON is never colored.
+Reads `~/.config/deepseek-chat/config.toml` and creates it on first use. Flags
+override the file; defaults apply otherwise.
 
 ## Install
 

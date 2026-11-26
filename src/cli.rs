@@ -198,6 +198,7 @@ impl Cli {
         });
         let mut think = String::new();
         let mut got_answer = false;
+        let mut failure = None;
         tty_write("thinking…");
 
         let ctrl = tokio::signal::ctrl_c();
@@ -237,12 +238,18 @@ impl Cli {
                     }
                 }
                 Some(Ev::Status(_)) => {}
-                Some(Ev::Fail(msg)) | Some(Ev::Fatal(msg)) => {
+                Some(Ev::Fail(msg)) => {
                     tty_clear();
+                    failure = Some(msg.clone());
                     eprintln!(
                         "{}",
                         theme::current().paint(Role::Error, &format!("error: {msg}"))
                     );
+                }
+                Some(Ev::Fatal(msg)) => {
+                    tty_clear();
+                    self.shutdown().await;
+                    bail!("{msg}");
                 }
                 Some(Ev::Toast(msg)) => {
                     tty_clear();
@@ -253,6 +260,9 @@ impl Cli {
 
         tty_clear();
         stream.finish()?;
+        if let Some(error) = failure {
+            bail!("{error}");
+        }
         if self.json {
             let answer = stream
                 .into_writer()
@@ -427,9 +437,9 @@ End a line with \\ to continue on the next one."
     /// One prompt, one answer, exit.
     pub async fn once(mut self, prompt: String) -> Result<()> {
         self.wait_ready().await?;
-        let sent = self.send(&prompt).await?;
+        let sent = self.send(&prompt).await;
         self.shutdown().await;
-        if sent {
+        if sent? {
             Ok(())
         } else {
             std::process::exit(130);
@@ -485,4 +495,42 @@ fn flag(arg: &str, current: bool) -> bool {
 
 fn on_off(value: bool) -> &'static str {
     if value { "on" } else { "off" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn browser_send_failures_are_not_successful_answers() {
+        let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
+        let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::spawn(async move {
+            let Some(Cmd::Send(text)) = commands.recv().await else {
+                panic!("expected a send command");
+            };
+            assert_eq!(text, "question");
+            event_tx.send(Ev::Fail("request failed".into())).unwrap();
+            event_tx
+                .send(Ev::Answer {
+                    text: String::new(),
+                    think: String::new(),
+                    done: true,
+                })
+                .unwrap();
+        });
+        let mut cli = Cli {
+            cfg: Config::default(),
+            tx,
+            ev: events,
+            think: false,
+            thinking: false,
+            search: false,
+            json: true,
+        };
+
+        let error = cli.send("question").await.unwrap_err();
+        assert_eq!(error.to_string(), "request failed");
+        worker.await.unwrap();
+    }
 }
