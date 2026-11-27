@@ -82,6 +82,26 @@ terminal. In the chat, `enter` sends, a trailing `\` continues the line, and
 Reads `~/.config/deepseek-chat/config.toml` and creates it on first use. Flags
 override the file; defaults apply otherwise.
 
+```toml
+# deepseek-chat configuration
+#
+# Nothing here needs an API key. These settings control the browser session
+# and, if DeepSeek redesigns its site, which elements are used.
+
+url = "https://chat.deepseek.com/"
+headless = true
+stealth = true
+thinking = true
+search = true
+window_width = 960
+window_height = 900
+poll_ms = 120
+settle_ms = 1200
+composer_selector = 'textarea, [contenteditable="true"], [role="textbox"]'
+answer_selector = '.ds-markdown, [class*="ds-markdown"], [class*="markdown"]'
+think_selector = '[class*="think"], [class*="reason"]'
+```
+
 ## Install
 
 **Requirements:** Rust 1.89+, `git`, and Chromium or Google Chrome on `PATH`.
