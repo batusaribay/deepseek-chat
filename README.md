@@ -58,7 +58,6 @@ Options:
       --say <TEXT>     With --probe: send this and stream the answer
       --url <URL>      Drive a different chat page
       --chrome <PATH>  Browser binary to use
-      --color <WHEN>   Color output: auto, always, or never [default: auto]
   -h, --help           Print help
   -V, --version        Print version
 ```

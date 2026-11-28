@@ -2,15 +2,6 @@ use std::env;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
-use clap::ValueEnum;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum ColorMode {
-    Auto,
-    Always,
-    Never,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     enabled: bool,
@@ -24,8 +15,8 @@ pub enum Role {
 
 static THEME: OnceLock<Theme> = OnceLock::new();
 
-pub fn init(mode: ColorMode) {
-    let _ = THEME.set(Theme::from_env(mode));
+pub fn init() {
+    let _ = THEME.set(Theme::from_env());
 }
 
 pub fn current() -> Theme {
@@ -33,13 +24,12 @@ pub fn current() -> Theme {
 }
 
 impl Theme {
-    fn from_env(mode: ColorMode) -> Self {
+    fn from_env() -> Self {
         let clicolor = env::var("CLICOLOR").ok();
         let force = env::var("CLICOLOR_FORCE").ok();
         let term = env::var("TERM").ok();
         Self {
             enabled: color_enabled(
-                mode,
                 env::var_os("NO_COLOR").is_some(),
                 clicolor.as_deref(),
                 force.as_deref(),
@@ -66,29 +56,22 @@ impl Theme {
 }
 
 fn color_enabled(
-    mode: ColorMode,
     no_color: bool,
     clicolor: Option<&str>,
     force: Option<&str>,
     term: Option<&str>,
     tty: bool,
 ) -> bool {
-    match mode {
-        ColorMode::Never => false,
-        ColorMode::Always => true,
-        ColorMode::Auto => {
-            if no_color {
-                return false;
-            }
-            if force.is_some_and(|value| !value.is_empty() && value != "0") {
-                return true;
-            }
-            if clicolor == Some("0") || term == Some("dumb") {
-                return false;
-            }
-            tty
-        }
+    if no_color {
+        return false;
     }
+    if force.is_some_and(|value| !value.is_empty() && value != "0") {
+        return true;
+    }
+    if clicolor == Some("0") || term == Some("dumb") {
+        return false;
+    }
+    tty
 }
 
 #[cfg(test)]
@@ -96,69 +79,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_modes_win() {
-        assert!(!color_enabled(
-            ColorMode::Never,
-            false,
-            None,
-            None,
-            None,
-            true
-        ));
-        assert!(color_enabled(
-            ColorMode::Always,
-            true,
-            Some("0"),
-            None,
-            Some("dumb"),
-            false
-        ));
-    }
-
-    #[test]
     fn auto_respects_the_environment() {
+        assert!(color_enabled(false, None, None, Some("xterm"), true));
+        assert!(!color_enabled(false, None, None, Some("xterm"), false));
+        assert!(!color_enabled(true, None, None, Some("xterm"), true));
+        assert!(!color_enabled(false, Some("0"), None, Some("xterm"), true));
+        assert!(!color_enabled(false, None, None, Some("dumb"), true));
         assert!(color_enabled(
-            ColorMode::Auto,
-            false,
-            None,
-            None,
-            Some("xterm"),
-            true
-        ));
-        assert!(!color_enabled(
-            ColorMode::Auto,
-            false,
-            None,
-            None,
-            Some("xterm"),
-            false
-        ));
-        assert!(!color_enabled(
-            ColorMode::Auto,
-            true,
-            None,
-            None,
-            Some("xterm"),
-            true
-        ));
-        assert!(!color_enabled(
-            ColorMode::Auto,
-            false,
-            Some("0"),
-            None,
-            Some("xterm"),
-            true
-        ));
-        assert!(!color_enabled(
-            ColorMode::Auto,
-            false,
-            None,
-            None,
-            Some("dumb"),
-            true
-        ));
-        assert!(color_enabled(
-            ColorMode::Auto,
             false,
             Some("0"),
             Some("1"),

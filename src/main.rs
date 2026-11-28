@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 
 use config::Config;
-use theme::{ColorMode, Role, current};
+use theme::{Role, current};
 
 /// A Rust CLI to chat with DeepSeek.
 ///
@@ -72,10 +72,6 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// Color output: auto, always, or never
-    #[arg(long, value_enum, default_value = "auto", value_name = "WHEN")]
-    color: ColorMode,
-
     /// Render a Markdown file the way answers are rendered
     #[arg(long, value_name = "FILE", hide = true)]
     render: Option<PathBuf>,
@@ -103,7 +99,7 @@ fn main() -> Result<()> {
     }
 
     let args = Args::parse();
-    theme::init(args.color);
+    theme::init();
 
     if let Some(path) = args.render {
         let text = std::fs::read_to_string(&path)?;
