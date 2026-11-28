@@ -26,7 +26,7 @@ search are switched through the two chips under the composer and can be changed
 with `/think` and `/search`. The answer is re-read from the page as it renders,
 converted from HTML back to plain text, and streamed complete line by line.
 
-Output has no colour or cursor tricks. Markdown markers are stripped, code
+The answer has no colour or cursor tricks. Markdown markers are stripped, code
 prints as itself, and nothing is drawn in an alternate screen. Conversation
 titles are kept in a small local index so they can be listed and reopened.
 
@@ -78,8 +78,9 @@ terminal. In the chat, `enter` sends, a trailing `\` continues the line, and
 
 ## Config
 
-Reads `~/.config/deepseek-chat/config.toml` and creates it on first use. Flags
-override the file; defaults apply otherwise.
+Reads `~/.config/deepseek-chat/config.toml` and creates it on first use, or
+`%APPDATA%\deepseek-chat\config.toml` on Windows. Flags override the file;
+defaults apply otherwise.
 
 ```toml
 # deepseek-chat configuration
@@ -101,7 +102,7 @@ answer_selector = '.ds-markdown, [class*="ds-markdown"], [class*="markdown"]'
 think_selector = '[class*="think"], [class*="reason"]'
 ```
 
-## Install
+## Installation
 
 **Requirements:** Rust 1.89+, `git`, and Chromium or Google Chrome on `PATH`.
 

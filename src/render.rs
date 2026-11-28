@@ -36,6 +36,16 @@ pub struct Stream<W: Write> {
     skip_line: bool,
     /// Run of `*` waiting to be dropped (emphasis markers).
     stars: usize,
+    /// Inside an inline code span, where markers are literal.
+    in_code: bool,
+    /// An underscore between word characters, held until the next character.
+    pending_underscore: bool,
+    /// An asterisk held to decide whether it is emphasis or literal math/text.
+    pending_star: bool,
+    /// The pending asterisk followed a word character.
+    star_after_word: bool,
+    /// Last visible character written, used to recognise word-internal `_`.
+    prev: Option<char>,
 }
 
 impl<W: Write> Stream<W> {
@@ -50,6 +60,11 @@ impl<W: Write> Stream<W> {
             opening: None,
             skip_line: false,
             stars: 0,
+            in_code: false,
+            pending_underscore: false,
+            pending_star: false,
+            star_after_word: false,
+            prev: None,
         }
     }
 
@@ -204,24 +219,71 @@ impl<W: Write> Stream<W> {
         if visible(ch).is_none() {
             return Ok(());
         }
+        if ch == '\n' {
+            self.stars = 0;
+            self.in_code = false;
+            self.pending_underscore = false;
+            self.pending_star = false;
+            self.prev = None;
+            self.out.write_all(b"\n")?;
+            self.line_start = true;
+            return Ok(());
+        }
+        if ch == '`' {
+            self.in_code = !self.in_code;
+            self.pending_star = false;
+            self.stars += 1;
+            return Ok(());
+        }
+        if self.in_code {
+            return self.emit_char(ch);
+        }
         match ch {
-            '\n' => {
-                self.stars = 0;
-                self.out.write_all(b"\n")?;
-                self.line_start = true;
+            '_' => {
+                // An underscore between letters is part of a word or URL; one
+                // at a word boundary is an emphasis marker.
+                if self.prev.is_some_and(|prev| prev.is_alphanumeric()) {
+                    self.pending_underscore = true;
+                }
+                self.stars += 1;
                 return Ok(());
             }
-            '*' | '_' | '`' => {
-                // Emphasis and code markers are dropped, not printed.
+            '*' => {
+                // Decide when the next character arrives: a star surrounded
+                // by spaces or between letters is literal, otherwise emphasis.
+                self.pending_star = true;
+                self.star_after_word = self.prev.is_some_and(|prev| prev.is_alphanumeric());
                 self.stars += 1;
                 return Ok(());
             }
             _ => {}
         }
-
+        if self.pending_underscore {
+            self.pending_underscore = false;
+            if ch.is_alphanumeric() {
+                self.emit_char('_')?;
+            }
+        }
+        if self.pending_star {
+            self.pending_star = false;
+            let literal = if self.star_after_word {
+                ch.is_alphanumeric()
+            } else {
+                ch.is_whitespace()
+            };
+            if literal {
+                self.emit_char('*')?;
+            }
+        }
         self.stars = 0;
+        self.emit_char(ch)
+    }
+
+    fn emit_char(&mut self, ch: char) -> io::Result<()> {
         let mut buf = [0u8; 4];
-        self.out.write_all(ch.encode_utf8(&mut buf).as_bytes())
+        self.out.write_all(ch.encode_utf8(&mut buf).as_bytes())?;
+        self.prev = Some(ch);
+        Ok(())
     }
 }
 
@@ -324,6 +386,24 @@ mod tests {
     #[test]
     fn headings_lose_their_hashes() {
         assert_eq!(render("# One\n## Two\n"), "One\nTwo\n");
+    }
+
+    #[test]
+    fn keeps_literal_asterisks_and_drops_emphasis() {
+        assert_eq!(render("2 * 3 = 6\n"), "2 * 3 = 6\n");
+        assert_eq!(render("a*b\n"), "a*b\n");
+        assert_eq!(render("**bold** and *italic*\n"), "bold and italic\n");
+    }
+
+    #[test]
+    fn keeps_underscores_inside_words_and_code() {
+        assert_eq!(render("snake_case_name\n"), "snake_case_name\n");
+        assert_eq!(render("`max_pool_size`\n"), "max_pool_size\n");
+        assert_eq!(render("_emphasis_\n"), "emphasis\n");
+        assert_eq!(
+            render("https://example.com/a_b_c\n"),
+            "https://example.com/a_b_c\n"
+        );
     }
 
     #[test]

@@ -92,7 +92,13 @@ fn print_help() -> Result<()> {
     Ok(())
 }
 
+fn usage_error(message: &str) -> ! {
+    eprintln!("deepseek-chat: {message}");
+    std::process::exit(2);
+}
+
 fn main() -> Result<()> {
+    sigpipe::reset();
     let no_args = std::env::args_os().len() == 1;
     if no_args && io::stdin().is_terminal() {
         return print_help();
@@ -112,7 +118,7 @@ fn main() -> Result<()> {
 
     let mut prompt = args.print.or(args.question);
     if args.chat && prompt.is_some() {
-        anyhow::bail!("--chat cannot be combined with a prompt");
+        usage_error("--chat cannot be combined with a prompt");
     }
 
     // Piped stdin means one shot: `echo "why is the sky blue" | deepseek-chat`
@@ -160,7 +166,7 @@ fn main() -> Result<()> {
     let think = args.think;
     let json = args.json;
     if json && prompt.is_none() {
-        anyhow::bail!("--json needs a single prompt");
+        usage_error("--json needs a single prompt");
     }
     let mut tried_login = false;
 

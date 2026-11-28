@@ -1,7 +1,8 @@
 //! Terminal front end: a prompt, streamed answers, and nothing else.
 //!
-//! No alternate screen, no colours, no full-screen app. Output goes to stdout,
-//! so it pipes, redirects and scrolls back like any other command.
+//! No alternate screen, no full-screen app, no colour in the answer. Output
+//! goes to stdout, so it pipes, redirects and scrolls back like any other
+//! command.
 
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;

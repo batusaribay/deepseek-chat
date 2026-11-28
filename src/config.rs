@@ -99,10 +99,14 @@ impl Config {
 }
 
 pub fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("deepseek-chat")
-        .join("config.toml")
+    let base = if cfg!(target_os = "macos") {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+    } else {
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+    };
+    base.join("deepseek-chat").join("config.toml")
 }
 
 pub fn data_root() -> PathBuf {

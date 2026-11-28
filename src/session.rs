@@ -285,14 +285,40 @@ __VIS__
 
 /// Prefer the browser the user actually runs, so version and fingerprint match.
 fn default_browser() -> Option<String> {
-    [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome-stable",
-    ]
-    .into_iter()
-    .find(|p| std::path::Path::new(p).exists())
-    .map(|p| p.to_string())
+    let mut candidates: Vec<std::path::PathBuf> = vec![
+        "/usr/bin/chromium".into(),
+        "/usr/bin/chromium-browser".into(),
+        "/usr/bin/google-chrome-stable".into(),
+        "/usr/bin/google-chrome".into(),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into(),
+        "/Applications/Chromium.app/Contents/MacOS/Chromium".into(),
+    ];
+    for variable in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(variable) {
+            let root = std::path::PathBuf::from(root);
+            candidates.push(root.join("Google/Chrome/Application/chrome.exe"));
+            candidates.push(root.join("Chromium/Application/chrome.exe"));
+        }
+    }
+    if let Some(found) = candidates.into_iter().find(|path| path.is_file()) {
+        return Some(found.to_string_lossy().into_owned());
+    }
+
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|directory| {
+        [
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "google-chrome-stable",
+            "chrome",
+            "chrome.exe",
+        ]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+    })
 }
 
 /// Small unpredictable pauses, like a person using a page.
@@ -309,8 +335,15 @@ async fn human_pause(min_ms: u64, max_ms: u64) {
 
 fn desktop_user_agent(product: &str) -> Option<String> {
     let version = product.split('/').nth(1)?;
+    let platform = if cfg!(target_os = "macos") {
+        "Macintosh; Intel Mac OS X 10_15_7"
+    } else if cfg!(target_os = "windows") {
+        "Windows NT 10.0; Win64; x64"
+    } else {
+        "X11; Linux x86_64"
+    };
     Some(format!(
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
+        "Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
     ))
 }
 
@@ -337,6 +370,7 @@ impl Session {
             .user_data_dir(&profile)
             .window_size(cfg.window_width, cfg.window_height)
             .disable_default_args()
+            .respect_https_errors()
             .arg("disable-background-networking")
             .arg("disable-background-timer-throttling")
             .arg("disable-backgrounding-occluded-windows")
@@ -1113,10 +1147,15 @@ pub async fn login(cfg: Config) -> Result<()> {
 
 /// Ask the browser to exit so it flushes its cookie database, then insist.
 async fn shutdown(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
     if let Some(pid) = child.id() {
         let _ = std::process::Command::new("kill")
             .args(["-TERM", &pid.to_string()])
             .status();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.start_kill();
     }
     if tokio::time::timeout(Duration::from_secs(8), child.wait())
         .await
@@ -1166,16 +1205,24 @@ fn restrict_permissions(path: &std::path::Path, mode: u32) {
 
 /// Chromium refuses to start when a previous run left its singleton files
 /// behind (a killed browser, or a recycled pid). Clear them when nothing is
-/// actually holding the profile.
+/// actually holding the profile. Only Linux can check that without another
+/// dependency, so elsewhere the files are left alone rather than deleting a
+/// lock that may belong to a live browser.
 fn clear_stale_lock(profile: &std::path::Path) {
-    if live_profile_pid(profile).is_some() {
-        return;
+    #[cfg(target_os = "linux")]
+    {
+        if live_profile_pid(profile).is_some() {
+            return;
+        }
+        for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+            let _ = std::fs::remove_file(profile.join(name));
+        }
     }
-    for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
-        let _ = std::fs::remove_file(profile.join(name));
-    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = profile;
 }
 
+#[cfg(target_os = "linux")]
 fn live_profile_pid(profile: &std::path::Path) -> Option<u32> {
     let target = std::fs::read_link(profile.join("SingletonLock")).ok()?;
     let pid: u32 = target.to_string_lossy().rsplit('-').next()?.parse().ok()?;
@@ -1185,6 +1232,11 @@ fn live_profile_pid(profile: &std::path::Path) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let state = stat.rsplit(')').next()?.split_whitespace().next()?;
     (state != "Z").then_some(pid)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn live_profile_pid(_profile: &std::path::Path) -> Option<u32> {
+    None
 }
 
 pub async fn probe(cfg: Config, say: Option<String>) -> Result<()> {
